@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>AI Circuit UI</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #1a1a1b; color: white; font-family: sans-serif; }
+        canvas { display: block; }
+        #status { position: absolute; top: 10; left: 10; pointer-events: none; color: #555; }
+    </style>
+</head>
+<body>
+    <div id="status">Status: Initializing...</div>
+    <canvas id="blueprint"></canvas>
+
+<script>
+    console.log("Script started...");
+    const canvas = document.getElementById('blueprint');
+    const ctx = canvas.getContext('2d');
+    const statusDiv = document.getElementById('status');
+
+    // Resize canvas to window
+    function resize() {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+    }
+    window.onresize = resize;
+    resize();
+
+    let camera = { x: 0, y: 0 };
+    let nodes = [
+        // MOCK DATA: If backend fails, you'll see this box
+        { id: 999, name: "Debug Node (No Backend)", x: 100, y: 100, inputs: [0], outputs: [0] }
+    ];
+    let wires = [];
+
+    // --- 1. Communication with Drogon ---
+    async function fetchGraph() {
+        try {
+            console.log("Fetching graph from backend...");
+            const response = await fetch('/api/graph');
+            if (!response.ok) throw new Error("Backend Error");
+            const data = await response.json();
+            
+            console.log("Data received:", data);
+            nodes = data.nodes;
+            wires = data.wires;
+            statusDiv.innerText = "Status: Connected to Engine";
+        } catch (err) {
+            console.error("Fetch failed:", err);
+            statusDiv.innerText = "Status: Backend Offline - Showing Mockup";
+        }
+    }
+
+    // Call fetch once at start
+    fetchGraph();
+
+    // --- 2. The Drawing Loop ---
+    function draw() {
+        // Clear screen with a slight grid pattern for "Blueprint" feel
+        ctx.fillStyle = "#1a1a1b";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        
+        ctx.save();
+        ctx.translate(camera.x, camera.y);
+
+        nodes.forEach(node => {
+            // Draw Box
+            ctx.fillStyle = "#333";
+            ctx.strokeStyle = "#555";
+            ctx.lineWidth = 2;
+            ctx.fillRect(node.x, node.y, 160, 60);
+            ctx.strokeRect(node.x, node.y, 160, 60);
+
+            // Draw Label
+            ctx.fillStyle = "white";
+            ctx.font = "12px Arial";
+            ctx.fillText(node.name, node.x + 10, node.y + 20);
+
+            // Draw Ports (Simplified)
+            ctx.fillStyle = "#3b82f6"; // Blue for INT
+            ctx.beginPath();
+            ctx.arc(node.x, node.y + 40, 5, 0, Math.PI*2); // Input
+            ctx.arc(node.x + 160, node.y + 40, 5, 0, Math.PI*2); // Output
+            ctx.fill();
+        });
+
+        ctx.restore();
+        requestAnimationFrame(draw);
+    }
+
+    // --- 3. Interaction Logic ---
+    let isPanning = false;
+    canvas.onmousedown = () => { isPanning = true; };
+    canvas.onmouseup = () => { isPanning = false; };
+    canvas.onmousemove = (e) => {
+        if (isPanning) {
+            camera.x += e.movementX;
+            camera.y += e.movementY;
+        }
+    };
+
+    console.log("Starting render loop...");
+    draw();
+</script>
+</body>
+</html>
