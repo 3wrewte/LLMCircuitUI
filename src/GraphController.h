@@ -13,6 +13,9 @@ public:
     METHOD_LIST_BEGIN
         ADD_METHOD_TO(GraphController::getGraph, "/api/graph", Get);
         ADD_METHOD_TO(GraphController::tick, "/api/tick", Post);
+        ADD_METHOD_TO(GraphController::syncGraph, "/api/sync", Post);
+        ADD_METHOD_TO(GraphController::persistToFile, "/api/persist", Post);
+        
     METHOD_LIST_END
 
     // Constructor: Initialize positions here
@@ -117,6 +120,38 @@ public:
         if (engine) engine->tick();
         auto resp = HttpResponse::newHttpResponse();
         resp->setBody("OK");
+        callback(resp);
+    }
+
+    // Stage 1: Sync UI state to Backend
+    void syncGraph(const HttpRequestPtr& req, std::function<void(const HttpResponsePtr&)>&& callback) {
+        auto json = req->getJsonObject();
+        if (json) {
+            // 1. Update positions
+            for (const auto& n : (*json)["nodes"]) {
+                int id = n["id"].asInt();
+                node_positions[id] = {n["x"].asFloat(), n["y"].asFloat()};
+
+                // 2. Update internal component configs (if provided)
+                if (n.isMember("config")) {
+                    // engine->get_node(id)->load_config(n["config"]);
+                }
+            }
+        }
+        callback(HttpResponse::newHttpResponse());
+    }
+
+    // Stage 2: Save everything to a physical file
+    void persistToFile(const HttpRequestPtr& req, std::function<void(const HttpResponsePtr&)>&& callback) {
+        Json::Value dump;
+        // ... Fill 'dump' by calling save_config on every node ...
+
+        //std::ofstream file("workflow.json");
+        //file << dump.toStyledString();
+        //file.close();
+
+        auto resp = HttpResponse::newHttpResponse();
+        resp->setBody("Workflow saved to disk.");
         callback(resp);
     }
 

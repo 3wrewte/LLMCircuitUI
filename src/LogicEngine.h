@@ -5,6 +5,7 @@
 #include <string>
 #include <map>
 #include <memory>
+#include <json/json.h>
 
 // --- 1. Type System ---
 enum class DataType { INT, BOOL, STRING, TENSOR };
@@ -28,6 +29,8 @@ public:
     virtual ~Component() = default;
     virtual void compute(const std::vector<Value>& inputs, std::vector<Value>& outputs) = 0;
     
+    virtual void save_config(Json::Value& config) const {}
+    virtual void load_config(const Json::Value& config) {}
     // UI Metadata
     virtual std::string get_name() const = 0;
     virtual std::vector<DataType> get_input_schema() const = 0;
@@ -128,8 +131,11 @@ public:
     void compute(const std::vector<Value>& in, std::vector<Value>& out) override {
         out[0] = Value(value);
     }
+
+    void save_config(Json::Value& config) const override { config["value"] = value; }
+    void load_config(const Json::Value& config) override { value = config["value"].asInt(); }
     std::string get_name() const override { return "Constant"; }
-    std::vector<DataType> get_input_schema() const override { return {DataType::INT, DataType::INT}; }
+    std::vector<DataType> get_input_schema() const override { return {}; }
     std::vector<DataType> get_output_schema() const override { return {DataType::INT}; }
     ConstantNode(int v){
         value = v;

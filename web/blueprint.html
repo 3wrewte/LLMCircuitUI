@@ -1,24 +1,49 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>AI Circuit UI</title>
+    <title>LLM Logic Circuit UI</title>
     <style>
-        body { margin: 0; overflow: hidden; background: #1a1a1b; color: white; font-family: sans-serif; }
-        canvas { display: block; }
-        #status { position: absolute; top: 10; left: 10; pointer-events: none; color: #555; }
+        body { margin: 0; overflow: hidden; background: #1a1a1b; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        canvas { display: block; cursor: crosshair; }
+        #overlay { position: absolute; top: 20px; left: 20px; color: #aaa; pointer-events: none; }
+        .controls { position: absolute; bottom: 20px; left: 20px; display: flex; gap: 10px; }
+        button { padding: 8px 16px; cursor: pointer; background: #333; color: white; border: 1px solid #555; border-radius: 4px; }
+        button:hover { background: #444; }
     </style>
 </head>
 <body>
-    <div id="status">Status: Initializing...</div>
+    <div id="overlay">
+        <h2 style="margin:0; color: #fff;">LogicEngine Blueprint</h2>
+        <div id="status">Connecting to C++ Backend...</div>
+    </div>
+
+    <div class="controls" style="pointer-events: auto;">
+        <button onclick="fetchGraph()">Refresh Graph</button>
+        <button onclick="stepTick()" style="background: #2e4a31;">Step Tick</button>
+    </div>
+
     <canvas id="blueprint"></canvas>
 
 <script>
-    console.log("Script started...");
     const canvas = document.getElementById('blueprint');
     const ctx = canvas.getContext('2d');
-    const statusDiv = document.getElementById('status');
+    
+    // UI Constants
+    const NODE_WIDTH = 160;
+    const PORT_RADIUS = 5;
+    const HEADER_HEIGHT = 25;
+    const PORT_SPACING = 20;
+    const TYPE_COLORS = { 0: "#3b82f6", 1: "#ef4444", 2: "#10b981", 3: "#f59e0b" }; // INT, BOOL, STRING, TENSOR
 
-    // Resize canvas to window
+    let camera = { x: 0, y: 0 };
+    let nodes = [];
+    let wires = [];
+    
+    // Interaction State
+    let isPanning = false;
+    let draggingNode = null;
+    let lastMouse = { x: 0, y: 0 };
+
     function resize() {
         canvas.width = window.innerWidth;
         canvas.height = window.innerHeight;
@@ -26,80 +51,167 @@
     window.onresize = resize;
     resize();
 
-    let camera = { x: 0, y: 0 };
-    let nodes = [
-        // MOCK DATA: If backend fails, you'll see this box
-        { id: 999, name: "Debug Node (No Backend)", x: 100, y: 100, inputs: [0], outputs: [0] }
-    ];
-    let wires = [];
-
-    // --- 1. Communication with Drogon ---
+    // --- Communication ---
     async function fetchGraph() {
         try {
-            console.log("Fetching graph from backend...");
-            const response = await fetch('/api/graph');
-            if (!response.ok) throw new Error("Backend Error");
-            const data = await response.json();
-            
-            console.log("Data received:", data);
+            const res = await fetch('/api/graph');
+            const data = await res.json();
             nodes = data.nodes;
             wires = data.wires;
-            statusDiv.innerText = "Status: Connected to Engine";
-        } catch (err) {
-            console.error("Fetch failed:", err);
-            statusDiv.innerText = "Status: Backend Offline - Showing Mockup";
+            document.getElementById('status').innerText = `Engine Online: ${nodes.length} nodes loaded`;
+        } catch (e) {
+            document.getElementById('status').innerText = "Backend Offline";
         }
     }
 
-    // Call fetch once at start
-    fetchGraph();
+    async function stepTick() {
+        await fetch('/api/tick', { method: 'POST' });
+        fetchGraph(); // Refresh values after tick
+    }
 
-    // --- 2. The Drawing Loop ---
+    // --- Math Helpers ---
+    function getPortPos(nodeIndex, portIndex, side) {
+        const node = nodes[nodeIndex];
+        const x = (side === 'in') ? node.x : node.x + NODE_WIDTH;
+        const y = node.y + HEADER_HEIGHT + (portIndex + 1) * PORT_SPACING;
+        return { x, y };
+    }
+
+    // --- Rendering ---
     function draw() {
-        // Clear screen with a slight grid pattern for "Blueprint" feel
         ctx.fillStyle = "#1a1a1b";
         ctx.fillRect(0, 0, canvas.width, canvas.height);
-        
+
         ctx.save();
         ctx.translate(camera.x, camera.y);
 
-        nodes.forEach(node => {
-            // Draw Box
-            ctx.fillStyle = "#333";
-            ctx.strokeStyle = "#555";
-            ctx.lineWidth = 2;
-            ctx.fillRect(node.x, node.y, 160, 60);
-            ctx.strokeRect(node.x, node.y, 160, 60);
-
-            // Draw Label
-            ctx.fillStyle = "white";
-            ctx.font = "12px Arial";
-            ctx.fillText(node.name, node.x + 10, node.y + 20);
-
-            // Draw Ports (Simplified)
-            ctx.fillStyle = "#3b82f6"; // Blue for INT
+        // 1. Draw Wires (Bezier Curves)
+        wires.forEach(w => {
+            const start = getPortPos(w.fromNode, w.fromPort, 'out');
+            const end = getPortPos(w.toNode, w.toPort, 'in');
+            
             ctx.beginPath();
-            ctx.arc(node.x, node.y + 40, 5, 0, Math.PI*2); // Input
-            ctx.arc(node.x + 160, node.y + 40, 5, 0, Math.PI*2); // Output
-            ctx.fill();
+            ctx.moveTo(start.x, start.y);
+            // Control points for nice S-curve
+            const cp1x = start.x + (end.x - start.x) / 2;
+            const cp2x = start.x + (end.x - start.x) / 2;
+            ctx.bezierCurveTo(cp1x, start.y, cp2x, end.y, end.x, end.y);
+            
+            ctx.strokeStyle = "#ffffff44";
+            ctx.lineWidth = 2;
+            ctx.stroke();
+        });
+
+        // 2. Draw Nodes
+        nodes.forEach((node, idx) => {
+            const totalPorts = Math.max(node.inputs.length, node.outputs.length);
+            const nodeHeight = HEADER_HEIGHT + (totalPorts + 1) * PORT_SPACING;
+
+            // Body
+            ctx.fillStyle = (node.name === "Register") ? "#2a2a35" : "#333";
+            ctx.strokeStyle = (draggingNode === node) ? "#3b82f6" : "#555";
+            ctx.lineWidth = 2;
+            ctx.fillRect(node.x, node.y, NODE_WIDTH, nodeHeight);
+            ctx.strokeRect(node.x, node.y, NODE_WIDTH, nodeHeight);
+
+            // Header
+            ctx.fillStyle = "#222";
+            ctx.fillRect(node.x, node.y, NODE_WIDTH, HEADER_HEIGHT);
+            ctx.fillStyle = "#eee";
+            ctx.font = "bold 12px Arial";
+            ctx.fillText(node.name.toUpperCase(), node.x + 10, node.y + 17);
+
+            // Inputs (Left)
+            node.inputs.forEach((type, pIdx) => {
+                const pos = getPortPos(idx, pIdx, 'in');
+                ctx.fillStyle = TYPE_COLORS[type] || "#fff";
+                ctx.beginPath();
+                ctx.arc(pos.x, pos.y, PORT_RADIUS, 0, Math.PI * 2);
+                ctx.fill();
+            });
+
+            // Outputs (Right)
+            node.outputs.forEach((type, pIdx) => {
+                const pos = getPortPos(idx, pIdx, 'out');
+                ctx.fillStyle = TYPE_COLORS[type] || "#fff";
+                ctx.beginPath();
+                ctx.arc(pos.x, pos.y, PORT_RADIUS, 0, Math.PI * 2);
+                ctx.fill();
+            });
         });
 
         ctx.restore();
         requestAnimationFrame(draw);
     }
 
-    // --- 3. Interaction Logic ---
-    let isPanning = false;
-    canvas.onmousedown = () => { isPanning = true; };
-    canvas.onmouseup = () => { isPanning = false; };
-    canvas.onmousemove = (e) => {
-        if (isPanning) {
-            camera.x += e.movementX;
-            camera.y += e.movementY;
-        }
+    // --- Interaction ---
+    canvas.onmousedown = (e) => {
+        const mx = e.clientX - camera.x;
+        const my = e.clientY - camera.y;
+
+        // Check for node click (Iterate backwards to grab top-most node)
+        draggingNode = nodes.slice().reverse().find(n => {
+            const h = HEADER_HEIGHT + (Math.max(n.inputs.length, n.outputs.length) + 1) * PORT_SPACING;
+            return mx > n.x && mx < n.x + NODE_WIDTH && my > n.y && my < n.y + h;
+        });
+
+        if (!draggingNode) isPanning = true;
+        lastMouse = { x: e.clientX, y: e.clientY };
     };
 
-    console.log("Starting render loop...");
+    window.onmousemove = (e) => {
+        const dx = e.clientX - lastMouse.x;
+        const dy = e.clientY - lastMouse.y;
+
+        if (draggingNode) {
+            draggingNode.x += dx;
+            draggingNode.y += dy;
+        } else if (isPanning) {
+            camera.x += dx;
+            camera.y += dy;
+        }
+        lastMouse = { x: e.clientX, y: e.clientY };
+    };
+
+    window.onmouseup = () => {
+        draggingNode = null;
+        isPanning = false;
+    };
+
+    // Stage 1: Sync current UI state to C++
+    async function syncWithBackend() {
+        const payload = {
+            nodes: nodes.map(n => ({
+                id: n.id,
+                x: n.x,
+                y: n.y,
+                config: n.config || {}
+            }))
+        };
+        
+        await fetch('/api/sync', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+    }
+    
+    // Trigger sync only on mouse UP (end of drag)
+    window.onmouseup = () => {
+        if (draggingNode) syncWithBackend(); // Save final position
+        draggingNode = null;
+        isPanning = false;
+    };
+    
+    // Stage 2: Tell backend to write to file
+    async function saveToDisk() {
+        await syncWithBackend(); // Ensure backend is up to date first
+        const res = await fetch('/api/persist', { method: 'POST' });
+        alert(await res.text());
+    }
+
+    // Initial load
+    fetchGraph();
     draw();
 </script>
 </body>
