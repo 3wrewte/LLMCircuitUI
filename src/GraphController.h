@@ -69,6 +69,11 @@ public:
             wire_drivers[inst.out_wires[p]] = {i, p};
         }
 
+        // Call the virtual function to get internal state
+        Json::Value config;
+        inst.logic->save_config(config);
+        nodeJson["config"] = config; 
+
         root["nodes"].append(nodeJson);
     }
 
@@ -90,31 +95,37 @@ public:
 
         // Register Q output drives the "current" wire
         wire_drivers[reg.cur_wire] = {ui_id, 0};
+
+        // For registers, the "internal state" is the actual stored value
+        Json::Value config;
+        if (reg.val.type == DataType::INT) config["current"] = reg.val.i;
+        else if (reg.val.type == DataType::STRING) config["current"] = reg.val.s;
+        regJson["config"] = config;
         
         root["nodes"].append(regJson);
         r_idx++;
     }
 
-    // --- 3. Generate Wires by matching IDs ---
-    // Check every node's inputs. If the wire ID has a driver, draw a connection.
-    for (int i = 0; i < instances.size(); ++i) {
-        auto& inst = instances[i];
-        for (int p = 0; p < inst.in_wires.size(); ++p) {
-            int w_id = inst.in_wires[p];
-            if (wire_drivers.count(w_id)) {
-                Json::Value wireJson;
-                wireJson["fromNode"] = wire_drivers[w_id].first;
-                wireJson["fromPort"] = wire_drivers[w_id].second;
-                wireJson["toNode"] = i;
-                wireJson["toPort"] = p;
-                root["wires"].append(wireJson);
+        // --- 3. Generate Wires by matching IDs ---
+        // Check every node's inputs. If the wire ID has a driver, draw a connection.
+        for (int i = 0; i < instances.size(); ++i) {
+            auto& inst = instances[i];
+            for (int p = 0; p < inst.in_wires.size(); ++p) {
+                int w_id = inst.in_wires[p];
+                if (wire_drivers.count(w_id)) {
+                    Json::Value wireJson;
+                    wireJson["fromNode"] = wire_drivers[w_id].first;
+                    wireJson["fromPort"] = wire_drivers[w_id].second;
+                    wireJson["toNode"] = i;
+                    wireJson["toPort"] = p;
+                    root["wires"].append(wireJson);
+                }
             }
         }
-    }
 
-    auto resp = HttpResponse::newHttpJsonResponse(root);
-    callback(resp);
-}
+        auto resp = HttpResponse::newHttpJsonResponse(root);
+        callback(resp);
+    }
 
     void tick(const HttpRequestPtr& req, std::function<void(const HttpResponsePtr&)>&& callback) {
         if (engine) engine->tick();

@@ -34,6 +34,8 @@
     const HEADER_HEIGHT = 25;
     const PORT_SPACING = 20;
     const TYPE_COLORS = { 0: "#3b82f6", 1: "#ef4444", 2: "#10b981", 3: "#f59e0b" }; // INT, BOOL, STRING, TENSOR
+    const CONFIG_BOX_HEIGHT = 18;
+    const CONFIG_PADDING = 5;
 
     let camera = { x: 0, y: 0 };
     let nodes = [];
@@ -104,15 +106,18 @@
 
         // 2. Draw Nodes
         nodes.forEach((node, idx) => {
-            const totalPorts = Math.max(node.inputs.length, node.outputs.length);
-            const nodeHeight = HEADER_HEIGHT + (totalPorts + 1) * PORT_SPACING;
+            // 1. Calculate dynamic height
+            // Base height + Ports + Config boxes
+            const portCount = Math.max(node.inputs.length, node.outputs.length);
+            const configKeys = Object.keys(node.config || {});
 
-            // Body
+            const portsHeight = (portCount + 1) * PORT_SPACING;
+            const configsHeight = configKeys.length * (CONFIG_BOX_HEIGHT + CONFIG_PADDING);
+            const nodeHeight = HEADER_HEIGHT + portsHeight + configsHeight + 5;
+        
+            // 2. Draw Node Body
             ctx.fillStyle = (node.name === "Register") ? "#2a2a35" : "#333";
-            ctx.strokeStyle = (draggingNode === node) ? "#3b82f6" : "#555";
-            ctx.lineWidth = 2;
             ctx.fillRect(node.x, node.y, NODE_WIDTH, nodeHeight);
-            ctx.strokeRect(node.x, node.y, NODE_WIDTH, nodeHeight);
 
             // Header
             ctx.fillStyle = "#222";
@@ -138,6 +143,29 @@
                 ctx.arc(pos.x, pos.y, PORT_RADIUS, 0, Math.PI * 2);
                 ctx.fill();
             });
+        
+            // 3. Draw Config "Show Boxes"
+            let currentY = node.y + HEADER_HEIGHT + portsHeight;
+
+            configKeys.forEach(key => {
+                const val = node.config[key];
+
+                // Draw the dark background box
+                ctx.fillStyle = "#1a1a1b";
+                ctx.fillRect(node.x + 10, currentY, NODE_WIDTH - 20, CONFIG_BOX_HEIGHT);
+
+                // Draw the Label: Value text
+                ctx.fillStyle = "#aaa";
+                ctx.font = "10px monospace";
+                const displayText = `${key}: ${val}`;
+                ctx.fillText(displayText, node.x + 15, currentY + 12);
+
+                currentY += CONFIG_BOX_HEIGHT + CONFIG_PADDING;
+            });
+        
+            // Draw selection border
+            ctx.strokeStyle = (draggingNode === node) ? "#3b82f6" : "#555";
+            ctx.strokeRect(node.x, node.y, NODE_WIDTH, nodeHeight);
         });
 
         ctx.restore();
