@@ -7,6 +7,7 @@
 #include <memory>
 #include <json/json.h>
 
+enum SysWireID { SYS_CLK = 0, SYS_RST = 1, SYS_BREAK = 2, USER_START = 10 };//reserved wire id for system wires
 // --- 1. Type System ---
 enum class DataType { INT, BOOL, STRING, TENSOR };
 
@@ -59,6 +60,8 @@ private:
     };
     std::vector<Instance> instances;
 
+    std::vector<int> execution_order;
+
 public:
     // --- Factory Methods ---
     int add_wire(DataType type) {
@@ -85,30 +88,67 @@ public:
     const std::vector<Instance>& get_instances() const { return instances; }
     const std::map<int, RegisterEntry>& get_registers() const { return registers; }
 
+    void compile() {
+        std::map<int, int> in_degree; 
+        std::map<int, std::vector<int>> adj; // Wire -> Component dependency
+        
+        // Build graph: Which wires drive which components?
+        for (int i = 0; i < instances.size(); ++i) {
+            int deps = 0;
+            for (int input_wire : instances[i].in_wires) {
+                // If the input is NOT a system wire or a register output, it's a dependency
+                bool is_source = (input_wire < USER_START);
+                for(auto const& [rid, reg] : registers) if(reg.cur_wire == input_wire) is_source = true;
+                
+                if (!is_source) {
+                    adj[input_wire].push_back(i);
+                    deps++;
+                }
+            }
+            in_degree[i] = deps;
+        }
+
+        std::queue<int> q;
+        for (int i = 0; i < instances.size(); ++i) if (in_degree[i] == 0) q.push(i);
+
+        execution_order.clear();
+        while (!q.empty()) {
+            int u = q.front(); q.pop();
+            execution_order.push_back(u);
+            for (int out_wire : instances[u].out_wires) {
+                for (int v : adj[out_wire]) {
+                    if (--in_degree[v] == 0) q.push(v);
+                }
+            }
+        }
+    }
+
     // --- Execution ---
     void tick() {
-        // 1. Reg Value -> Cur Wire
+        // Step 1: Reg current -> Wires
         for (auto& [id, reg] : registers) {
             wires[reg.cur_wire] = reg.val;
         }
 
-        // 2. Compute Nodes (Assuming sorted for now)
-        for (auto& inst : instances) {
+        // Step 2: Solve Wires Topologically
+        for (int idx : execution_order) {
+            auto& comp = instances[idx];
             std::vector<Value> in_vals;
-            for (int id : inst.in_wires) in_vals.push_back(wires[id]);
+            for (int in_id : comp.in_wires) in_vals.push_back(wires[in_id]);
             
-            std::vector<Value> out_vals(inst.out_wires.size());
-            inst.logic->compute(in_vals, out_vals);
+            std::vector<Value> out_vals(comp.out_wires.size());
+            comp.logic->compute(in_vals, out_vals);
             
-            for (size_t i = 0; i < inst.out_wires.size(); ++i) {
-                wires[inst.out_wires[i]] = out_vals[i];
+            for (size_t i = 0; i < comp.out_wires.size(); ++i) {
+                wires[comp.out_wires[i]] = out_vals[i];
             }
         }
 
-        // 3. Nxt Wire -> Reg Value
+        // Step 3: Update Registers (Clock Edge)
         for (auto& [id, reg] : registers) {
             reg.val = wires[reg.nxt_wire];
         }
+
     }
 
     Value read_wire(int id) { return wires[id]; }

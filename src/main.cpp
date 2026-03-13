@@ -37,6 +37,8 @@ int main() {
     // In a real MUX you'd use rst logic, here we just accumulate
     engine->add_node(std::make_unique<AdderNode>(), {w_sum, 0}, {r1_nxt}); // Hacky bypass
 
+    engine->compile();
+
     // 4. Start Drogon
     std::cout << "Starting Circuit UI Server on http://localhost:8080" << std::endl;
     

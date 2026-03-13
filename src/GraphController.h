@@ -149,6 +149,7 @@ public:
                 }
             }
         }
+        engine->compile();
         callback(HttpResponse::newHttpResponse());
     }
 
