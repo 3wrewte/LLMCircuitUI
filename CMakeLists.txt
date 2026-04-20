@@ -7,18 +7,23 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # 1. Include Drogon (Internal Libs)
 add_subdirectory(libs/drogon)
 
-# 2. Source Files
+# 2. Find libcurl
+find_package(CURL REQUIRED)
+
+# 3. Source Files
 set(SOURCE_FILES 
     src/main.cpp
-    src/GraphController.h # Drogon discovers controllers in headers
+    src/GraphController.h
 )
 
-# 3. Create Executable
+# 4. Create Executable
 add_executable(${PROJECT_NAME} ${SOURCE_FILES})
 
-# 4. Link Dependencies
-# Drogon provides a target that handles JsonCpp, Trantor, and UUID automatically
-target_link_libraries(${PROJECT_NAME} PRIVATE drogon)
+# 5. Link Dependencies
+target_link_libraries(${PROJECT_NAME} PRIVATE drogon CURL::libcurl)
 
-# Ensure the compiler can see your src/ folder
-target_include_directories(${PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+# 6. Include Paths
+target_include_directories(${PROJECT_NAME} PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ExecuteEngine
+)

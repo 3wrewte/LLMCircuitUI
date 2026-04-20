@@ -79,6 +79,7 @@ private:
     std::vector<int> execution_order;
 
 public:
+    std::function<void(int, const std::vector<Value>&, const std::vector<Value>&)> on_node_computed;
     int add_wire(DataType type) {
         int id = next_uid++;
         wire_types[id] = type;
@@ -155,6 +156,8 @@ public:
 
             std::vector<Value> out_vals(comp.out_wires.size());
             comp.logic->compute(in_vals, out_vals);
+
+            if (on_node_computed) on_node_computed(idx, in_vals, out_vals);
 
             for (size_t i = 0; i < comp.out_wires.size(); ++i) {
                 wires[comp.out_wires[i]] = out_vals[i];

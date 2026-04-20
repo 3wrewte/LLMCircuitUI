@@ -1,19 +1,17 @@
 #include <drogon/drogon.h>
 #include "LogicEngine.h"
 #include "GraphController.h"
+#include "ExecuteEngine/ExecuteEngine.h"
 
 int main() {
     auto engine = std::make_unique<LogicEngine>();
-    GraphController::setEngine(engine.get());
 
-    // --- Demo LLM Circuit: Auto-regressive token loop ---
-    // Each tick: build context from system prompt + history, infer 1 token, append to history
-    //
+    // --- Build LLM Auto-Regressive Circuit ---
     // StrConst → Str2Stream ──┐
-    //                          ├─→ ContextBuild → LLMInfer ──→ Token2Str
-    //    Register[TOKEN_STREAM]┘         │
-    //         ↑                          ↓
-    //         └───────── TokenAccum ←────┘
+    //                          ├→ ContextBuild → LLMInfer → Token2Str
+    //    Register[TOKEN_STREAM]┘       │
+    //         ↑                        ↓
+    //         └───────── TokenAccum ←──┘
 
     auto [hist_cur, hist_nxt] = engine->add_register(
         DataType::TOKEN_STREAM, Value::token_stream(std::vector<std::string>{}));
@@ -32,6 +30,14 @@ int main() {
     engine->add_node(std::make_unique<TokenToStringNode>(), {w_token}, {w_output});
 
     engine->compile();
+
+    auto cfg = ExecuteEngine::load_config("config.json");
+
+    auto exec = std::make_unique<ExecuteEngine>(std::move(engine), cfg);
+
+    GraphController::setEngine(exec->get_logic());
+
+    exec->start_cli();
 
     std::cout << "Starting LLM Circuit UI Server on http://localhost:8080" << std::endl;
 
