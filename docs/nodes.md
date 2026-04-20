@@ -2,21 +2,33 @@
 
 ## Primitive Nodes
 
-| Node | Inputs | Output | Description |
-|------|--------|--------|-------------|
-| `ConstantNode` | — | INT | Outputs a configurable integer constant |
-| `StringConstantNode` | — | STRING | Outputs a configurable string constant |
-| `AdderNode` | INT, INT | INT | Arithmetic addition |
-| `ThresholdNode` | INT | BOOL | `input >= threshold` comparison |
+| Node | Kind | Inputs | Output | Description |
+|------|------|--------|--------|-------------|
+| `ConstantNode` | `Constant` | — | INT | Outputs a configurable integer constant |
+| `BoolConstantNode` | `BoolConst` | — | BOOL | Outputs a configurable boolean constant |
+| `StringConstantNode` | `StrConst` | — | STRING | Outputs a configurable string constant |
+| `AdderNode` | `Adder` | INT, INT | INT | Arithmetic addition |
+| `ThresholdNode` | `Threshold` | INT | BOOL | `input >= threshold` comparison |
+| `AndNode` | `And` | BOOL, BOOL | BOOL | Logical AND |
+| `NotNode` | `Not` | BOOL | BOOL | Logical NOT |
 
 ## Type Conversion Nodes
 
-| Node | Input | Output | Description |
-|------|-------|--------|-------------|
-| `Token2Str` | TOKEN | STRING | Decode token to string |
-| `Str2Token` | STRING | TOKEN | Encode string as single token |
-| `Str2Stream` | STRING | TOKEN_STREAM | Wrap string as 1-element stream |
-| `TokenMatch` | TOKEN | BOOL | Test if token equals a configured value |
+| Node | Kind | Input | Output | Description |
+|------|------|-------|--------|-------------|
+| `Token2Str` | `Token2Str` | TOKEN | STRING | Decode token to string |
+| `Str2Token` | `Str2Token` | STRING | TOKEN | Encode string as single token |
+| `Str2Stream` | `Str2Stream` | STRING | TOKEN_STREAM | Wrap string as 1-element stream |
+| `Stream2Str` | `Stream2Str` | TOKEN_STREAM | STRING | Join all tokens in stream to a string |
+| `TokenMatch` | `TokenMatch` | TOKEN | BOOL | Test if token equals a configured value |
+
+## Control Flow Nodes
+
+| Node | Kind | Inputs | Output | Description |
+|------|------|--------|--------|-------------|
+| `MuxNode` | `Mux` | BOOL, STRING, STRING | STRING | If sel=true output a, else b |
+| `UserInputNode` | `UserInput` | — | STRING | Configurable text input from CLI/API |
+| `StopConditionNode` | `StopCond` | TOKEN | BOOL | Detects stop tokens, triggers SYS_BREAK |
 
 ## LLM Nodes
 
@@ -43,6 +55,40 @@
 - **Output**: `CONTEXT_BUFFER`
 - Concatenates all input streams in port order into a flat context buffer
 - Typical layout: port 0 = system prompt, port 1 = conversation history
+
+### StopConditionNode
+
+- **Input**: `TOKEN` — a single token to check
+- **Output**: `BOOL` — true if the token matches any stop token
+- **Config**: `stop_tokens` (array of strings) — default: `["\n\n", "<|im_end|>", "</s>"]`
+- Should be connected to `SYS_BREAK` wire via an `And` node or directly
+- When output is true and wired to break, `run` command will stop
+
+### UserInputNode
+
+- **Input**: none
+- **Output**: `STRING` — the text set via CLI `input` command or API
+- **Config**: `value` (string) — default value, can be set before running
+- CLI: `input <text>` sets this value on all UserInput nodes in the circuit
+
+### MuxNode
+
+- **Inputs**: `BOOL sel`, `STRING a`, `STRING b`
+- **Output**: `STRING` — `a` if sel is true, `b` otherwise
+- Used for conditional routing, e.g., reset vs run paths
+
+### Stream2StrNode
+
+- **Input**: `TOKEN_STREAM`
+- **Output**: `STRING` — concatenation of all tokens
+- Useful for displaying generated text
+
+## Node Factory
+
+All nodes are registered with a `kind` string. This enables:
+- **Deserialization**: circuits loaded from JSON use `kind` to instantiate nodes
+- **Dynamic listing**: `list` CLI command shows all available kinds
+- **No recompilation**: new `.json` circuits can use any registered node
 
 ## Design Principles
 

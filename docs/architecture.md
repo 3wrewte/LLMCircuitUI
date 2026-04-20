@@ -75,3 +75,46 @@ This reduces API calls by up to K×, at the cost of wasted tokens when the predi
 - IDs `0–9` are reserved for system wires (`SYS_CLK`, `SYS_RST`, `SYS_BREAK`)
 - IDs `10+` are user wires, assigned sequentially by `add_wire()` / `add_register()`
 - Each register owns 2 wires: `cur` (output, read each tick) and `nxt` (input, captured at clock edge)
+
+## Compile Passes
+
+Before execution, `compile()` runs a pipeline of passes:
+
+### 1. Type Check
+- Verifies every node's input/output wires match its schema
+- Reports port count mismatches and type mismatches
+
+### 2. Combinational Loop Detection
+- Builds dependency graph ignoring register cur-wires (which break loops)
+- Detects cycles using DFS with 3-color marking
+- Reports the cycle path if found
+
+### 3. Dead Code Elimination
+- Traces from "driven" wires (register nxt, node inputs) backward
+- Marks reachable nodes
+- Reports count of unreachable nodes as a warning
+
+### 4. Topological Sort
+- Respects data dependencies (wire → consuming node)
+- Register outputs and system wires are treated as sources
+- Produces `execution_order` for the tick loop
+
+Compile errors are accessible via `get_compile_errors()`. Severity is `"error"` (blocks execution) or `"warning"` (informational).
+
+## IR Serialization
+
+Circuits can be saved to / loaded from JSON:
+
+```json
+{
+  "version": 1,
+  "wires": [{"id": 100, "type": "STRING"}],
+  "registers": [{"id": 108, "cur_wire": 109, "nxt_wire": 110, "init": {...}}],
+  "nodes": [{"kind": "LLMInfer", "inputs": [105], "outputs": [106], "config": {...}}]
+}
+```
+
+- `LogicEngine::serialize()` exports the current graph
+- `LogicEngine::deserialize(json)` rebuilds a new engine from JSON
+- `NodeFactory` maps `kind` strings to `Component` constructors
+- All registered node kinds: `list` CLI command

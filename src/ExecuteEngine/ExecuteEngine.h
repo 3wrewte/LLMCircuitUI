@@ -22,12 +22,13 @@ class ExecuteEngine {
     float default_temperature = 0.7f;
     int tick_count = 0;
     bool verbose = true;
+    std::string current_circuit_path;
 
     std::mutex mtx;
     bool running = true;
 
     void configure_llm_nodes() {
-        for (auto& inst : logic->get_instances()) {
+        for (auto& inst : logic->get_instances_mut()) {
             auto* llm = dynamic_cast<LLMInferNode*>(inst.logic.get());
             if (!llm) continue;
 
@@ -36,9 +37,8 @@ class ExecuteEngine {
             int bs = batch_size;
             float temp = default_temperature;
             bool vb = verbose;
-            std::string model = be ? be->get_model_name() : "stub";
 
-            llm->infer_callback = [be, ca, bs, temp, vb, model](
+            llm->infer_callback = [be, ca, bs, temp, vb](
                 const std::vector<std::string>& context) -> std::string {
 
                 auto cached = ca->try_get(context);
@@ -149,9 +149,81 @@ class ExecuteEngine {
         }
     }
 
+    void find_and_set_user_input(const std::string& val) {
+        bool found = false;
+        for (auto& inst : logic->get_instances_mut()) {
+            auto* ui = dynamic_cast<UserInputNode*>(inst.logic.get());
+            if (!ui) continue;
+            ui->value = val;
+            found = true;
+            std::cout << "  UserInput[" << ui->value << "] set to \"" << val << "\"" << std::endl;
+        }
+        if (!found) {
+            std::cout << "  No UserInput node in circuit" << std::endl;
+        }
+    }
+
+    void reset_registers() {
+        for (auto& [id, reg] : logic->get_registers_mut()) {
+            switch (reg.val.type) {
+                case DataType::INT: reg.val = Value(0); break;
+                case DataType::BOOL: reg.val = Value(false); break;
+                case DataType::STRING: reg.val = Value(std::string("")); break;
+                case DataType::TOKEN: reg.val = Value::token(""); break;
+                case DataType::TOKEN_STREAM: reg.val = Value::token_stream(std::vector<std::string>{}); break;
+                case DataType::CONTEXT_BUFFER: reg.val = Value::context_buffer(std::vector<std::string>{}); break;
+            }
+        }
+        tick_count = 0;
+        cache.invalidate_all();
+        std::cout << "  Registers reset, cache cleared" << std::endl;
+    }
+
+    void do_load(const std::string& path) {
+        std::ifstream f(path);
+        if (!f.is_open()) {
+            std::cerr << "  Cannot open: " << path << std::endl;
+            return;
+        }
+        Json::CharReaderBuilder rb;
+        Json::Value root;
+        std::string errors;
+        if (!Json::parseFromStream(rb, f, &root, &errors)) {
+            std::cerr << "  Parse error: " << errors << std::endl;
+            return;
+        }
+        auto new_engine = LogicEngine::deserialize(root);
+        new_engine->compile();
+        if (new_engine->has_errors()) {
+            std::cerr << "  Compile errors:" << std::endl;
+            for (auto& e : new_engine->get_compile_errors()) {
+                std::cerr << "    " << e.severity << ": " << e.message << std::endl;
+            }
+        }
+        logic = std::move(new_engine);
+        configure_llm_nodes();
+        current_circuit_path = path;
+        tick_count = 0;
+        cache.invalidate_all();
+        std::cout << "  Loaded: " << path << " ("
+                  << logic->get_instances().size() << " nodes, "
+                  << logic->get_registers().size() << " regs)" << std::endl;
+    }
+
+    void do_save(const std::string& path) {
+        auto json = logic->serialize();
+        Json::StreamWriterBuilder wb;
+        wb["indentation"] = "  ";
+        std::ofstream f(path);
+        f << Json::writeString(wb, json);
+        f.close();
+        current_circuit_path = path;
+        std::cout << "  Saved: " << path << std::endl;
+    }
+
     void cli_loop() {
         std::cout << "\n=== LLM Circuit CLI ===" << std::endl;
-        std::cout << "Commands: tick [N], wires, nodes, regs, cache, verbose [on|off], help, quit" << std::endl;
+        std::cout << "Type 'help' for commands" << std::endl;
         std::cout << "> " << std::flush;
 
         std::string line;
@@ -176,11 +248,24 @@ class ExecuteEngine {
                     logic->tick();
                     if (verbose) print_tick_footer();
                 }
+            } else if (cmd == "run" || cmd == "r") {
+                int max_ticks = 1000;
+                iss >> max_ticks;
+                for (int i = 0; i < max_ticks && running; ++i) {
+                    tick_count++;
+                    if (verbose) print_tick_header();
+                    logic->tick();
+                    if (verbose) print_tick_footer();
+                    if (logic->is_break()) {
+                        std::cout << "  ** BREAK signal **" << std::endl;
+                        break;
+                    }
+                }
             } else if (cmd == "wires" || cmd == "w") {
                 print_wires();
             } else if (cmd == "nodes" || cmd == "n") {
                 print_nodes();
-            } else if (cmd == "regs" || cmd == "r") {
+            } else if (cmd == "regs") {
                 for (auto& [id, reg] : logic->get_registers()) {
                     std::cout << "  Reg[" << id << "] = ";
                     print_value(reg.val);
@@ -188,27 +273,70 @@ class ExecuteEngine {
                 }
             } else if (cmd == "cache" || cmd == "c") {
                 cache.print_stats();
+            } else if (cmd == "load") {
+                std::string path;
+                iss >> path;
+                do_load(path);
+            } else if (cmd == "save") {
+                std::string path;
+                if (iss >> path) {
+                    do_save(path);
+                } else if (!current_circuit_path.empty()) {
+                    do_save(current_circuit_path);
+                } else {
+                    std::cout << "  Usage: save <path>" << std::endl;
+                }
+            } else if (cmd == "input" || cmd == "i") {
+                std::string val;
+                std::getline(iss, val);
+                while (!val.empty() && val.front() == ' ') val.erase(val.begin());
+                if (val.empty()) {
+                    std::cout << "  Usage: input <text>" << std::endl;
+                } else {
+                    find_and_set_user_input(val);
+                }
+            } else if (cmd == "reset") {
+                reset_registers();
+            } else if (cmd == "compile") {
+                logic->compile();
+                for (auto& e : logic->get_compile_errors()) {
+                    std::cout << "  " << e.severity << ": " << e.message << std::endl;
+                }
+                if (!logic->has_errors()) {
+                    std::cout << "  Compile OK" << std::endl;
+                }
+            } else if (cmd == "list" || cmd == "ls") {
+                auto kinds = NodeFactory::list_kinds();
+                std::cout << "  Available node kinds:" << std::endl;
+                for (auto& k : kinds) std::cout << "    " << k << std::endl;
             } else if (cmd == "verbose" || cmd == "v") {
                 std::string arg;
                 iss >> arg;
                 if (arg == "off" || arg == "0") verbose = false;
                 else verbose = true;
-                std::cout << "verbose=" << (verbose ? "on" : "off") << std::endl;
+                std::cout << "  verbose=" << (verbose ? "on" : "off") << std::endl;
             } else if (cmd == "help" || cmd == "h") {
-                std::cout << "  tick [N]    — run N ticks (default 1)" << std::endl;
-                std::cout << "  wires       — show all wire values" << std::endl;
-                std::cout << "  nodes       — show all nodes" << std::endl;
-                std::cout << "  regs        — show all register values" << std::endl;
-                std::cout << "  cache       — show token cache stats" << std::endl;
+                std::cout << "  tick [N]       — run N ticks (default 1)" << std::endl;
+                std::cout << "  run [N]        — run up to N ticks (default 1000), stop on BREAK" << std::endl;
+                std::cout << "  input <text>   — set value on UserInput node(s)" << std::endl;
+                std::cout << "  wires          — show all wire values" << std::endl;
+                std::cout << "  nodes          — show all nodes" << std::endl;
+                std::cout << "  regs           — show register values" << std::endl;
+                std::cout << "  cache          — show token cache stats" << std::endl;
+                std::cout << "  load <file>    — load circuit from JSON" << std::endl;
+                std::cout << "  save [file]    — save circuit to JSON" << std::endl;
+                std::cout << "  reset          — reset registers + clear cache" << std::endl;
+                std::cout << "  compile        — re-run compile passes" << std::endl;
+                std::cout << "  list           — list available node kinds" << std::endl;
                 std::cout << "  verbose [on|off] — toggle debug output" << std::endl;
-                std::cout << "  quit        — shutdown" << std::endl;
+                std::cout << "  quit           — shutdown" << std::endl;
             } else if (cmd == "quit" || cmd == "q") {
                 running = false;
                 std::cout << "Shutting down..." << std::endl;
                 drogon::app().quit();
                 break;
             } else {
-                std::cout << "Unknown command: " << cmd << std::endl;
+                std::cout << "Unknown command: " << cmd << " (type 'help')" << std::endl;
             }
 
             std::cout << "> " << std::flush;
@@ -255,16 +383,6 @@ public:
         std::lock_guard<std::mutex> lock(mtx);
         tick_count++;
         logic->tick();
-    }
-
-    void run_ticks(int n) {
-        std::lock_guard<std::mutex> lock(mtx);
-        for (int i = 0; i < n; ++i) {
-            tick_count++;
-            if (verbose) print_tick_header();
-            logic->tick();
-            if (verbose) print_tick_footer();
-        }
     }
 
     void start_cli() {
