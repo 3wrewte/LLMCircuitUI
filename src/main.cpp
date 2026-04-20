@@ -3,45 +3,38 @@
 #include "GraphController.h"
 
 int main() {
-    // 1. Instantiate the Engine
-    // We create it here so its lifetime matches the application
     auto engine = std::make_unique<LogicEngine>();
-
-    // 2. Link the Engine to the Controller
     GraphController::setEngine(engine.get());
 
-    // 3. Build the Demo Graph (The Circuit)
-    // Register-based loop: sum += 5 until sum >= 25
-    auto [r1_cur, r1_nxt] = engine->add_register(DataType::INT, Value(0));
-    int w_const = engine->add_wire(DataType::INT);
-    int w_sum = engine->add_wire(DataType::INT);
-    int w_break = engine->add_wire(DataType::BOOL);
+    // --- Demo LLM Circuit: Auto-regressive token loop ---
+    // Each tick: build context from system prompt + history, infer 1 token, append to history
+    //
+    // StrConst → Str2Stream ──┐
+    //                          ├─→ ContextBuild → LLMInfer ──→ Token2Str
+    //    Register[TOKEN_STREAM]┘         │
+    //         ↑                          ↓
+    //         └───────── TokenAccum ←────┘
 
-    // Add Nodes
-    engine->add_node(std::make_unique<ConstantNode>(5), {}, {w_const});
-    engine->add_node(std::make_unique<AdderNode>(), {w_const, r1_cur}, {w_sum});
-    
-    // Threshold Node: breaks when sum >= 25
-    class ThresholdNode : public Component {
-    public:
-        void compute(const std::vector<Value>& in, std::vector<Value>& out) override {
-            out[0] = Value(in[0].i >= 25);
-        }
-        std::string get_name() const override { return "Threshold"; }
-        std::vector<DataType> get_input_schema() const override { return {DataType::INT}; }
-        std::vector<DataType> get_output_schema() const override { return {DataType::BOOL}; }
-    };
-    engine->add_node(std::make_unique<ThresholdNode>(), {w_sum}, {w_break});
+    auto [hist_cur, hist_nxt] = engine->add_register(
+        DataType::TOKEN_STREAM, Value::token_stream(std::vector<std::string>{}));
 
-    // Loopback: r1_next = w_sum
-    // In a real MUX you'd use rst logic, here we just accumulate
-    engine->add_node(std::make_unique<AdderNode>(), {w_sum, 0}, {r1_nxt}); // Hacky bypass
+    int w_sysprompt = engine->add_wire(DataType::STRING);
+    int w_sysstream = engine->add_wire(DataType::TOKEN_STREAM);
+    int w_context   = engine->add_wire(DataType::CONTEXT_BUFFER);
+    int w_token     = engine->add_wire(DataType::TOKEN);
+    int w_output    = engine->add_wire(DataType::STRING);
+
+    engine->add_node(std::make_unique<StringConstantNode>("You are a helpful AI."), {}, {w_sysprompt});
+    engine->add_node(std::make_unique<StringToTokenStreamNode>(), {w_sysprompt}, {w_sysstream});
+    engine->add_node(std::make_unique<ContextBuildNode>(2), std::vector<int>{w_sysstream, hist_cur}, std::vector<int>{w_context});
+    engine->add_node(std::make_unique<LLMInferNode>(), {w_context}, {w_token});
+    engine->add_node(std::make_unique<TokenAccumNode>(), std::vector<int>{hist_cur, w_token}, std::vector<int>{hist_nxt});
+    engine->add_node(std::make_unique<TokenToStringNode>(), {w_token}, {w_output});
 
     engine->compile();
 
-    // 4. Start Drogon
-    std::cout << "Starting Circuit UI Server on http://localhost:8080" << std::endl;
-    
+    std::cout << "Starting LLM Circuit UI Server on http://localhost:8080" << std::endl;
+
     drogon::app()
         .setDocumentRoot("../web")
         .addListener("0.0.0.0", 8080)

@@ -90,8 +90,8 @@ public:
         regJson["x"] = node_positions.count(ui_id) ? node_positions[ui_id].x : 100.0f;
         regJson["y"] = node_positions.count(ui_id) ? node_positions[ui_id].y : 100.0f;
         
-        regJson["inputs"] = Json::arrayValue; regJson["inputs"].append(0); // Assume INT
-        regJson["outputs"] = Json::arrayValue; regJson["outputs"].append(0);
+        regJson["inputs"] = Json::arrayValue; regJson["inputs"].append((int)reg.val.type);
+        regJson["outputs"] = Json::arrayValue; regJson["outputs"].append((int)reg.val.type);
 
         // Register Q output drives the "current" wire
         wire_drivers[reg.cur_wire] = {ui_id, 0};
@@ -99,7 +99,12 @@ public:
         // For registers, the "internal state" is the actual stored value
         Json::Value config;
         if (reg.val.type == DataType::INT) config["current"] = reg.val.i;
+        else if (reg.val.type == DataType::BOOL) config["current"] = reg.val.b;
         else if (reg.val.type == DataType::STRING) config["current"] = reg.val.s;
+        else if (reg.val.type == DataType::TOKEN) config["current"] = reg.val.s;
+        else if (reg.val.type == DataType::TOKEN_STREAM || reg.val.type == DataType::CONTEXT_BUFFER) {
+            config["current"] = "[" + std::to_string(reg.val.tokens.size()) + " tokens]";
+        }
         regJson["config"] = config;
         
         root["nodes"].append(regJson);
