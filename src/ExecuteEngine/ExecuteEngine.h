@@ -6,6 +6,7 @@
 #include "TokenCache.h"
 #include <memory>
 #include <mutex>
+#include <atomic>
 #include <thread>
 #include <sstream>
 #include <fstream>
@@ -22,10 +23,10 @@ class ExecuteEngine {
     float default_temperature = 0.7f;
     int tick_count = 0;
     bool verbose = true;
-    std::string current_circuit_path;
 
     std::mutex mtx;
-    bool running = true;
+    std::atomic<bool> running{true};
+    std::atomic<bool> run_loop_active{false};
 
     void configure_llm_nodes() {
         for (auto& inst : logic->get_instances_mut()) {
@@ -156,27 +157,9 @@ class ExecuteEngine {
             if (!ui) continue;
             ui->value = val;
             found = true;
-            std::cout << "  UserInput[" << ui->value << "] set to \"" << val << "\"" << std::endl;
+            std::cout << "  UserInput set to \"" << val << "\"" << std::endl;
         }
-        if (!found) {
-            std::cout << "  No UserInput node in circuit" << std::endl;
-        }
-    }
-
-    void reset_registers() {
-        for (auto& [id, reg] : logic->get_registers_mut()) {
-            switch (reg.val.type) {
-                case DataType::INT: reg.val = Value(0); break;
-                case DataType::BOOL: reg.val = Value(false); break;
-                case DataType::STRING: reg.val = Value(std::string("")); break;
-                case DataType::TOKEN: reg.val = Value::token(""); break;
-                case DataType::TOKEN_STREAM: reg.val = Value::token_stream(std::vector<std::string>{}); break;
-                case DataType::CONTEXT_BUFFER: reg.val = Value::context_buffer(std::vector<std::string>{}); break;
-            }
-        }
-        tick_count = 0;
-        cache.invalidate_all();
-        std::cout << "  Registers reset, cache cleared" << std::endl;
+        if (!found) std::cout << "  No UserInput node in circuit" << std::endl;
     }
 
     void do_load(const std::string& path) {
@@ -202,7 +185,6 @@ class ExecuteEngine {
         }
         logic = std::move(new_engine);
         configure_llm_nodes();
-        current_circuit_path = path;
         tick_count = 0;
         cache.invalidate_all();
         std::cout << "  Loaded: " << path << " ("
@@ -217,7 +199,6 @@ class ExecuteEngine {
         std::ofstream f(path);
         f << Json::writeString(wb, json);
         f.close();
-        current_circuit_path = path;
         std::cout << "  Saved: " << path << std::endl;
     }
 
@@ -281,8 +262,6 @@ class ExecuteEngine {
                 std::string path;
                 if (iss >> path) {
                     do_save(path);
-                } else if (!current_circuit_path.empty()) {
-                    do_save(current_circuit_path);
                 } else {
                     std::cout << "  Usage: save <path>" << std::endl;
                 }
@@ -296,15 +275,13 @@ class ExecuteEngine {
                     find_and_set_user_input(val);
                 }
             } else if (cmd == "reset") {
-                reset_registers();
+                reset_circuit();
             } else if (cmd == "compile") {
                 logic->compile();
                 for (auto& e : logic->get_compile_errors()) {
                     std::cout << "  " << e.severity << ": " << e.message << std::endl;
                 }
-                if (!logic->has_errors()) {
-                    std::cout << "  Compile OK" << std::endl;
-                }
+                if (!logic->has_errors()) std::cout << "  Compile OK" << std::endl;
             } else if (cmd == "list" || cmd == "ls") {
                 auto kinds = NodeFactory::list_kinds();
                 std::cout << "  Available node kinds:" << std::endl;
@@ -315,23 +292,9 @@ class ExecuteEngine {
                 if (arg == "off" || arg == "0") verbose = false;
                 else verbose = true;
                 std::cout << "  verbose=" << (verbose ? "on" : "off") << std::endl;
-            } else if (cmd == "help" || cmd == "h") {
-                std::cout << "  tick [N]       — run N ticks (default 1)" << std::endl;
-                std::cout << "  run [N]        — run up to N ticks (default 1000), stop on BREAK" << std::endl;
-                std::cout << "  input <text>   — set value on UserInput node(s)" << std::endl;
-                std::cout << "  wires          — show all wire values" << std::endl;
-                std::cout << "  nodes          — show all nodes" << std::endl;
-                std::cout << "  regs           — show register values" << std::endl;
-                std::cout << "  cache          — show token cache stats" << std::endl;
-                std::cout << "  load <file>    — load circuit from JSON" << std::endl;
-                std::cout << "  save [file]    — save circuit to JSON" << std::endl;
-                std::cout << "  reset          — reset registers + clear cache" << std::endl;
-                std::cout << "  compile        — re-run compile passes" << std::endl;
-                std::cout << "  list           — list available node kinds" << std::endl;
-                std::cout << "  verbose [on|off] — toggle debug output" << std::endl;
-                std::cout << "  quit           — shutdown" << std::endl;
             } else if (cmd == "quit" || cmd == "q") {
                 running = false;
+                run_loop_active = false;
                 std::cout << "Shutting down..." << std::endl;
                 drogon::app().quit();
                 break;
@@ -346,7 +309,7 @@ class ExecuteEngine {
 public:
     struct Config {
         std::string api_key;
-        std::string base_url = "https://api.siliconflow.cn/v1";
+        std::string base_url = "https://api.siliconflow.com/v1";
         std::string model = "Qwen/Qwen3-8B";
         int batch_size = 8;
         float temperature = 0.7f;
@@ -374,15 +337,76 @@ public:
 
     ~ExecuteEngine() {
         running = false;
+        run_loop_active = false;
         curl_global_cleanup();
     }
 
     LogicEngine* get_logic() { return logic.get(); }
+    int get_tick_count() const { return tick_count; }
 
+    // --- Single tick (thread-safe) ---
     void run_tick() {
         std::lock_guard<std::mutex> lock(mtx);
         tick_count++;
         logic->tick();
+    }
+
+    // --- Run loop ---
+    void start_run_loop(int max_ticks = 1000) {
+        if (run_loop_active) return;
+        run_loop_active = true;
+        std::thread([this, max_ticks]() {
+            for (int i = 0; i < max_ticks && run_loop_active && running; ++i) {
+                std::lock_guard<std::mutex> lock(mtx);
+                tick_count++;
+                logic->tick();
+                if (logic->is_break()) break;
+            }
+            run_loop_active = false;
+        }).detach();
+    }
+
+    void stop_run_loop() { run_loop_active = false; }
+    bool is_run_active() const { return run_loop_active; }
+
+    // --- Reset ---
+    void reset_circuit() {
+        std::lock_guard<std::mutex> lock(mtx);
+        for (auto& [id, reg] : logic->get_registers_mut()) {
+            switch (reg.val.type) {
+                case DataType::INT: reg.val = Value(0); break;
+                case DataType::BOOL: reg.val = Value(false); break;
+                case DataType::STRING: reg.val = Value(std::string("")); break;
+                case DataType::TOKEN: reg.val = Value::token(""); break;
+                case DataType::TOKEN_STREAM: reg.val = Value::token_stream(std::vector<std::string>{}); break;
+                case DataType::CONTEXT_BUFFER: reg.val = Value::context_buffer(std::vector<std::string>{}); break;
+            }
+        }
+        tick_count = 0;
+        cache.invalidate_all();
+        std::cout << "  Registers reset, cache cleared" << std::endl;
+    }
+
+    // --- Replace engine (for undo/redo) ---
+    LogicEngine* replace_logic(std::unique_ptr<LogicEngine> new_engine) {
+        std::lock_guard<std::mutex> lock(mtx);
+        logic = std::move(new_engine);
+        configure_llm_nodes();
+        return logic.get();
+    }
+
+    void reconfigure_llm() {
+        std::lock_guard<std::mutex> lock(mtx);
+        configure_llm_nodes();
+    }
+
+    // --- Input ---
+    void set_user_input(const std::string& text) {
+        std::lock_guard<std::mutex> lock(mtx);
+        for (auto& inst : logic->get_instances_mut()) {
+            auto* ui = dynamic_cast<UserInputNode*>(inst.logic.get());
+            if (ui) ui->value = text;
+        }
     }
 
     void start_cli() {
@@ -410,7 +434,7 @@ public:
         }
 
         cfg.api_key = root.get("api_key", "").asString();
-        cfg.base_url = root.get("base_url", "https://api.siliconflow.cn/v1").asString();
+        cfg.base_url = root.get("base_url", "https://api.siliconflow.com/v1").asString();
         cfg.model = root.get("model", "Qwen/Qwen3-8B").asString();
         cfg.batch_size = root.get("batch_size", 8).asInt();
         cfg.temperature = root.get("temperature", 0.7).asFloat();

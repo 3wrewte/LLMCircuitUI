@@ -1,246 +1,404 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>LLM Logic Circuit UI</title>
+    <title>LLM Circuit UI</title>
     <style>
-        body { margin: 0; overflow: hidden; background: #1a1a1b; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
-        canvas { display: block; cursor: crosshair; }
-        #overlay { position: absolute; top: 20px; left: 20px; color: #aaa; pointer-events: none; }
-        .controls { position: absolute; bottom: 20px; left: 20px; display: flex; gap: 10px; }
-        button { padding: 8px 16px; cursor: pointer; background: #333; color: white; border: 1px solid #555; border-radius: 4px; }
-        button:hover { background: #444; }
+        * { box-sizing: border-box; }
+        body { margin: 0; overflow: hidden; background: #1a1a1b; font-family: 'Segoe UI', sans-serif; }
+        canvas { display: block; }
+        #header { position: absolute; top: 0; left: 280px; right: 0; height: 40px;
+                   background: #222; border-bottom: 1px solid #333; display: flex; align-items: center; padding: 0 16px; gap: 8px; z-index: 10; }
+        #header span { color: #aaa; font-size: 12px; }
+        #status { color: #10b981; font-size: 12px; margin-left: auto; }
+        #palette { position: absolute; top: 0; left: 0; width: 280px; height: 100%;
+                    background: #1e1e22; border-right: 1px solid #333; overflow-y: auto; z-index: 10; padding-top: 8px; }
+        .pal-section { color: #888; font-size: 11px; padding: 8px 12px 4px; text-transform: uppercase; letter-spacing: 1px; }
+        .pal-item { color: #ccc; font-size: 12px; padding: 6px 12px; cursor: grab; border-left: 3px solid transparent; }
+        .pal-item:hover { background: #2a2a30; border-left-color: #3b82f6; }
+        .pal-item .schema { color: #666; font-size: 10px; margin-left: 6px; }
+        #controls { position: absolute; bottom: 0; left: 280px; right: 0; height: 48px;
+                     background: #222; border-top: 1px solid #333; display: flex; align-items: center;
+                     padding: 0 16px; gap: 8px; z-index: 10; }
+        #controls button { padding: 6px 14px; cursor: pointer; background: #333; color: white;
+                           border: 1px solid #555; border-radius: 4px; font-size: 12px; }
+        #controls button:hover { background: #444; }
+        #controls button.run-btn { background: #2e4a31; }
+        #controls button.stop-btn { background: #4a2e2e; }
+        #controls button.danger-btn { background: #4a2e2e; }
+        #input-box { flex: 1; background: #1a1a1b; color: white; border: 1px solid #555;
+                      border-radius: 4px; padding: 6px 10px; font-size: 12px; outline: none; }
+        #controls label { color: #888; font-size: 11px; }
+        #config-panel { position: absolute; display: none; background: #252530; border: 1px solid #555;
+                         border-radius: 6px; padding: 12px; z-index: 20; min-width: 240px; }
+        #config-panel h4 { margin: 0 0 8px; color: #eee; font-size: 13px; }
+        #config-panel .field { margin-bottom: 6px; }
+        #config-panel .field label { display: block; color: #888; font-size: 10px; margin-bottom: 2px; }
+        #config-panel .field input, #config-panel .field textarea { width: 100%; background: #1a1a1b;
+             color: white; border: 1px solid #555; border-radius: 3px; padding: 4px 8px; font-size: 12px; outline: none; font-family: monospace; }
+        #config-panel .field textarea { min-height: 60px; resize: vertical; }
+        #config-panel .buttons { display: flex; gap: 6px; margin-top: 8px; }
+        #config-panel .buttons button { padding: 4px 12px; font-size: 11px; border-radius: 3px;
+             cursor: pointer; border: 1px solid #555; color: white; }
+        #config-panel .btn-ok { background: #2e4a31; }
+        #config-panel .btn-cancel { background: #333; }
+        #toast { position: absolute; top: 50px; left: 50%; transform: translateX(-50%);
+                  background: #ef4444; color: white; padding: 8px 16px; border-radius: 4px;
+                  font-size: 12px; display: none; z-index: 30; pointer-events: none; }
     </style>
 </head>
 <body>
-    <div id="overlay">
-        <h2 style="margin:0; color: #fff;">LogicEngine Blueprint</h2>
-        <div id="status">Connecting to C++ Backend...</div>
+    <div id="palette"><div class="pal-section">Nodes</div><div id="palette-list"></div></div>
+    <div id="header">
+        <button onclick="fetchGraph()">Refresh</button>
+        <button onclick="doUndo()">Undo</button>
+        <button onclick="doRedo()">Redo</button>
+        <button onclick="deleteSelected()" class="danger-btn">Delete</button>
+        <button onclick="doSave()">Save</button>
+        <span id="status">Offline</span>
     </div>
-
-    <div class="controls" style="pointer-events: auto;">
-        <button onclick="fetchGraph()">Refresh Graph</button>
-        <button onclick="stepTick()" style="background: #2e4a31;">Step Tick</button>
+    <div id="controls">
+        <button onclick="doStep()" class="run-btn">Step</button>
+        <button id="run-btn" onclick="doRun()" class="run-btn">Run</button>
+        <button id="stop-btn" onclick="doStop()" class="stop-btn" style="display:none;">Stop</button>
+        <button onclick="doReset()">Reset</button>
+        <label>Input:</label>
+        <input type="text" id="input-box" placeholder="UserInput value..." onkeydown="if(event.key==='Enter')doInput()">
+        <button onclick="doInput()">Send</button>
     </div>
-
+    <div id="config-panel"><h4 id="config-title">Config</h4><div id="config-fields"></div>
+        <div class="buttons"><button class="btn-ok" onclick="applyConfig()">Apply</button>
+        <button class="btn-cancel" onclick="hideConfigPanel()">Cancel</button></div></div>
+    <div id="toast"></div>
     <canvas id="blueprint"></canvas>
-
 <script>
-    const canvas = document.getElementById('blueprint');
-    const ctx = canvas.getContext('2d');
-    
-    // UI Constants
-    const NODE_WIDTH = 160;
-    const PORT_RADIUS = 5;
-    const HEADER_HEIGHT = 25;
-    const PORT_SPACING = 20;
-    const TYPE_COLORS = { 0: "#3b82f6", 1: "#ef4444", 2: "#10b981", 3: "#f59e0b", 4: "#e879f9", 5: "#c084fc", 6: "#fb923c" };
-    const CONFIG_BOX_HEIGHT = 18;
-    const CONFIG_PADDING = 5;
+const canvas = document.getElementById('blueprint');
+const ctx = canvas.getContext('2d');
+const NW = 180, PR = 6, HH = 24, PG = 22, LINE_H = 14;
+const TC = {0:"#3b82f6",1:"#ef4444",2:"#10b981",3:"#f59e0b",4:"#e879f9",5:"#c084fc",6:"#fb923c"};
+const TN = {0:"INT",1:"BOOL",2:"STR",3:"TOK",4:"STREAM",5:"CTX",6:"?"};
 
-    let camera = { x: 0, y: 0 };
-    let nodes = [];
-    let wires = [];
-    
-    // Interaction State
-    let isPanning = false;
-    let draggingNode = null;
-    let lastMouse = { x: 0, y: 0 };
+let cam={x:0,y:0}, nodes=[], wires=[], palTypes=[], runningLoop=false;
+let isPanning=false, draggingNode=null, lastMouse={x:0,y:0}, selectedNode=null;
+let wiringFrom=null, configNode=null;
 
-    function resize() {
-        canvas.width = window.innerWidth;
-        canvas.height = window.innerHeight;
+function resize(){canvas.width=window.innerWidth;canvas.height=window.innerHeight;}
+window.onresize=resize; resize();
+
+async function api(p,m='GET',b=null){try{const o={method:m,headers:{'Content-Type':'application/json'}};if(b)o.body=JSON.stringify(b);return await fetch('/api/'+p,o);}catch(e){return null;}}
+
+async function fetchGraph(){
+    try{
+        const r=await fetch('/api/graph'),d=await r.json();
+        nodes=d.nodes||[]; wires=d.wires||[];
+        const ra=d.runActive||false;
+        document.getElementById('status').textContent=ra?'Running':'Online';
+        document.getElementById('status').style.color=ra?'#f59e0b':'#10b981';
+        document.getElementById('run-btn').style.display=ra?'none':'';
+        document.getElementById('stop-btn').style.display=ra?'':'none';
+        if(ra&&!runningLoop){runningLoop=true;pollLoop();}
+        else if(!ra)runningLoop=false;
+    }catch(e){document.getElementById('status').textContent='Offline';document.getElementById('status').style.color='#ef4444';}
+}
+
+async function fetchPalette(){
+    try{
+        const r=await fetch('/api/node_types'); palTypes=await r.json();
+        const list=document.getElementById('palette-list'); list.innerHTML='';
+        const groups={LLM:[],Convert:[],Logic:[],Input:[],Display:[]};
+        const gmap={LLMInfer:0,TokenAccum:0,ContextBuild:0,StopCond:0,
+            Token2Str:1,Str2Token:1,Str2Stream:1,Stream2Str:1,TokenMatch:1,
+            Mux:2,And:2,Not:2,Threshold:2,Adder:2,
+            StrConst:3,Constant:3,BoolConst:3,UserInput:3,
+            ShowStr:4,ShowStream:4};
+        const keys=Object.keys(groups);
+        for(const t of palTypes){const g=gmap[t.kind];if(g!==undefined)groups[keys[g]].push(t);}
+        for(const[label,items]of Object.entries(groups)){
+            if(!items.length)continue;
+            const sec=document.createElement('div');sec.className='pal-section';sec.textContent=label;list.appendChild(sec);
+            for(const t of items){
+                const el=document.createElement('div');el.className='pal-item';el.draggable=true;
+                el.innerHTML=t.name+'<span class="schema">'+t.inputs.length+'->'+t.outputs.length+'</span>';
+                el.addEventListener('dragstart',e=>e.dataTransfer.setData('kind',t.kind));list.appendChild(el);
+            }
+        }
+    }catch(e){}
+}
+
+async function doStep(){await api('tick','POST');await fetchGraph();}
+async function doRun(){runningLoop=true;await api('run','POST');document.getElementById('run-btn').style.display='none';document.getElementById('stop-btn').style.display='';pollLoop();}
+async function doStop(){await api('stop','POST');runningLoop=false;document.getElementById('run-btn').style.display='';document.getElementById('stop-btn').style.display='none';}
+async function doReset(){await api('reset','POST');await fetchGraph();}
+async function doInput(){const v=document.getElementById('input-box').value;if(!v)return;await api('input','POST',{text:v});document.getElementById('input-box').value='';await fetchGraph();}
+async function doSave(){await api('save','POST');showToast('Saved','#10b981');}
+async function doUndo(){await api('undo','POST');await fetchGraph();}
+async function doRedo(){await api('redo','POST');await fetchGraph();}
+async function deleteSelected(){if(!selectedNode||selectedNode.system)return;await api('remove_node','POST',{id:selectedNode.id});selectedNode=null;await fetchGraph();}
+async function pollLoop(){if(!runningLoop)return;await fetchGraph();setTimeout(pollLoop,500);}
+function showToast(msg,color='#ef4444'){const t=document.getElementById('toast');t.textContent=msg;t.style.background=color;t.style.display='block';setTimeout(()=>t.style.display='none',2000);}
+
+// --- Text wrapping helper ---
+function wrapText(text, maxChars) {
+    const lines = [];
+    let remaining = text;
+    while (remaining.length > 0) {
+        if (remaining.length <= maxChars) { lines.push(remaining); break; }
+        let breakIdx = remaining.lastIndexOf(' ', maxChars);
+        if (breakIdx <= 0) breakIdx = maxChars;
+        lines.push(remaining.substring(0, breakIdx));
+        remaining = remaining.substring(breakIdx).replace(/^\s+/, '');
     }
-    window.onresize = resize;
-    resize();
+    return lines.length ? lines : [''];
+}
 
-    // --- Communication ---
-    async function fetchGraph() {
-        try {
-            const res = await fetch('/api/graph');
-            const data = await res.json();
-            nodes = data.nodes;
-            wires = data.wires;
-            document.getElementById('status').innerText = `Engine Online: ${nodes.length} nodes loaded`;
-        } catch (e) {
-            document.getElementById('status').innerText = "Backend Offline";
+function cfgLines(key, val, maxChars) {
+    let display = '';
+    if (Array.isArray(val)) {
+        const joined = val.slice(0, 20).join('');
+        display = joined.length > 40 ? joined.substring(0, 37) + '...' : joined;
+    }
+    else if (typeof val === 'boolean') display = val ? 'true' : 'false';
+    else display = String(val);
+    const full = key + ': ' + display;
+    return wrapText(full, maxChars);
+}
+
+function nodeH(n){
+    const p = Math.max(n.inputs.length, n.outputs.length, 1);
+    const cfg = n.config || {};
+    const maxChars = 24;
+    let cfgLines_total = 0;
+    for (const [key, val] of Object.entries(cfg)) {
+        const lines = cfgLines(key, val, maxChars);
+        cfgLines_total += lines.length;
+    }
+    return HH + p * PG + cfgLines_total * LINE_H + 10;
+}
+
+function portP(n,i,side){return{x:side==='in'?n.x:n.x+NW,y:n.y+HH+i*PG+PG/2};}
+function hitPort(mx,my){
+    for(const n of nodes){
+        for(let p=0;p<n.outputs.length;p++){const pp=portP(n,p,'out');if(Math.hypot(mx-pp.x,my-pp.y)<PR+4)return{nodeId:n.id,idx:p,side:'out',dataType:n.outputs[p]};}
+        for(let p=0;p<n.inputs.length;p++){const pp=portP(n,p,'in');if(Math.hypot(mx-pp.x,my-pp.y)<PR+4)return{nodeId:n.id,idx:p,side:'in',dataType:n.inputs[p]};}
+    }return null;
+}
+function hitNode(mx,my){for(let i=nodes.length-1;i>=0;i--){const n=nodes[i],h=nodeH(n);if(mx>=n.x&&mx<=n.x+NW&&my>=n.y&&my<=n.y+h)return n;}return null;}
+function nodeById(id){return nodes.find(n=>n.id===id);}
+
+// --- Config Panel ---
+function showConfigPanel(node){
+    configNode=node;const panel=document.getElementById('config-panel');
+    document.getElementById('config-title').textContent=node.name+' Config';
+    const fields=document.getElementById('config-fields');fields.innerHTML='';
+    const cfg=node.config||{};
+    for(const[key,val]of Object.entries(cfg)){
+        if(key==='current'&&node.kind==='Register')continue;
+        if(key==='display'&&(node.kind==='ShowStr'||node.kind==='ShowStream'))continue;
+        const div=document.createElement('div');div.className='field';
+        const label=document.createElement('label');label.textContent=key;
+        const isLong = typeof val==='string' && val.length > 40;
+        const input = document.createElement(isLong?'textarea':'input');
+        input.dataset.key=key;
+        if(typeof val==='boolean'){input.type='checkbox';input.checked=val;}
+        else if(typeof val==='number'){input.type='number';input.value=val;input.step='any';}
+        else if(Array.isArray(val))input.value=JSON.stringify(val);
+        else input.value=String(val);
+        div.appendChild(label);div.appendChild(input);fields.appendChild(div);
+    }
+    const editableKeys=Object.keys(cfg).filter(k=>!(node.kind==='Register'&&k==='current')&&!(node.kind==='ShowStr'&&k==='display')&&!(node.kind==='ShowStream'&&k==='display'));
+    if(!editableKeys.length)fields.innerHTML='<div style="color:#666;font-size:11px">No editable config</div>';
+    panel.style.display='block';
+    panel.style.left=Math.min(node.x+NW+10,window.innerWidth-280)+'px';
+    panel.style.top=Math.min(node.y,window.innerHeight-250)+'px';
+}
+function hideConfigPanel(){document.getElementById('config-panel').style.display='none';configNode=null;}
+async function applyConfig(){
+    if(!configNode)return;
+    const fields=document.querySelectorAll('#config-fields .field input, #config-fields .field textarea');
+    const newCfg={},origCfg=configNode.config||{};
+    for(const f of fields){const k=f.dataset.key,orig=origCfg[k];
+        if(f.type==='checkbox')newCfg[k]=f.checked;
+        else if(typeof orig==='number')newCfg[k]=parseFloat(f.value);
+        else if(Array.isArray(orig)){try{newCfg[k]=JSON.parse(f.value);}catch(e){newCfg[k]=f.value;}}
+        else newCfg[k]=f.value;
+    }
+    await api('sync','POST',{nodes:[{id:configNode.id,x:configNode.x,y:configNode.y,kind:configNode.kind,config:newCfg}]});
+    hideConfigPanel();await fetchGraph();
+}
+
+canvas.addEventListener('dragover',e=>e.preventDefault());
+canvas.addEventListener('drop',async e=>{e.preventDefault();const kind=e.dataTransfer.getData('kind');if(!kind)return;await api('add_node','POST',{kind,x:e.clientX-cam.x-280,y:e.clientY-cam.y-48});await fetchGraph();});
+
+canvas.addEventListener('mousedown',e=>{
+    const mx=e.clientX-cam.x,my=e.clientY-cam.y;
+    const port=hitPort(mx,my);
+    if(port){wiringFrom=port;return;}
+    const node=hitNode(mx,my);
+    if(node){selectedNode=node;draggingNode=node;hideConfigPanel();}
+    else{selectedNode=null;isPanning=true;hideConfigPanel();}
+    lastMouse={x:e.clientX,y:e.clientY};
+});
+
+canvas.addEventListener('mousemove',e=>{
+    const dx=e.clientX-lastMouse.x,dy=e.clientY-lastMouse.y;
+    if(draggingNode){draggingNode.x+=dx;draggingNode.y+=dy;}
+    else if(isPanning){cam.x+=dx;cam.y+=dy;}
+    lastMouse={x:e.clientX,y:e.clientY};
+});
+
+canvas.addEventListener('mouseup',async e=>{
+    if(wiringFrom){
+        const mx=e.clientX-cam.x,my=e.clientY-cam.y;
+        const port=hitPort(mx,my);
+        if(port&&port.nodeId!==wiringFrom.nodeId){
+            let fn,fp,tn,tp;
+            if(wiringFrom.side==='out'&&port.side==='in'){fn=wiringFrom.nodeId;fp=wiringFrom.idx;tn=port.nodeId;tp=port.idx;}
+            else if(wiringFrom.side==='in'&&port.side==='out'){fn=port.nodeId;fp=port.idx;tn=wiringFrom.nodeId;tp=wiringFrom.idx;}
+            if(fn!==undefined){
+                const fNode=nodeById(fn),tNode=nodeById(tn);
+                const ft=fNode?fNode.outputs[fp]:-1,tt=tNode?tNode.inputs[tp]:-2;
+                if(ft===tt){await api('add_wire','POST',{fromNode:fn,fromPort:fp,toNode:tn,toPort:tp});await fetchGraph();}
+                else showToast('Type mismatch: '+(TN[ft]||'?')+' -> '+(TN[tt]||'?'));
+            }
+        }
+        wiringFrom=null;
+    }
+    if(draggingNode)await api('sync','POST',{nodes:[{id:draggingNode.id,x:draggingNode.x,y:draggingNode.y}]});
+    draggingNode=null;isPanning=false;
+});
+
+canvas.addEventListener('dblclick',e=>{
+    const mx=e.clientX-cam.x,my=e.clientY-cam.y;
+    const n=hitNode(mx,my);
+    if(n&&!n.system)showConfigPanel(n);
+});
+
+document.addEventListener('keydown',e=>{
+    if((e.key==='Delete'||e.key==='Backspace')&&document.activeElement.tagName!=='INPUT'&&document.activeElement.tagName!=='TEXTAREA')deleteSelected();
+    if(e.ctrlKey&&e.key==='z'){e.preventDefault();doUndo();}
+    if(e.ctrlKey&&e.key==='y'){e.preventDefault();doRedo();}
+});
+
+canvas.addEventListener('contextmenu',async e=>{
+    e.preventDefault();const mx=e.clientX-cam.x,my=e.clientY-cam.y;
+    for(const w of wires){
+        const fn=nodeById(w.fromNode),tn=nodeById(w.toNode);if(!fn||!tn)continue;
+        const p1=portP(fn,w.fromPort,'out'),p2=portP(tn,w.toPort,'in');
+        const d=ptBDist(mx,my,p1,p2);
+        if(d<8){if(confirm('Remove this wire?')){await api('remove_wire','POST',{toNode:w.toNode,toPort:w.toPort});await fetchGraph();}return;}
+    }
+});
+
+function ptBDist(px,py,p1,p2){const cpx=(p1.x+p2.x)/2;let m=1e9;for(let t=0;t<=1;t+=.05){const bx=(1-t)*(1-t)*p1.x+2*(1-t)*t*cpx+t*t*p2.x,by=(1-t)*(1-t)*p1.y+2*(1-t)*t*p1.y+t*t*p2.y,d=Math.hypot(px-bx,py-by);if(d<m)m=d;}return m;}
+
+function drawWire(p1,p2,color,active){
+    ctx.beginPath();ctx.moveTo(p1.x,p1.y);
+    const cpx=(p1.x+p2.x)/2;
+    ctx.bezierCurveTo(cpx,p1.y,cpx,p2.y,p2.x,p2.y);
+    ctx.strokeStyle=active?color:(color+'88');ctx.lineWidth=active?3:2;ctx.stroke();
+}
+
+function draw(){
+    ctx.fillStyle='#1a1a1b';ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.save();ctx.translate(cam.x,cam.y);
+
+    // Grid
+    ctx.strokeStyle='#1f1f22';ctx.lineWidth=1;const gs=50;
+    const sx=Math.floor(-cam.x/gs)*gs,sy=Math.floor(-cam.y/gs)*gs;
+    for(let x=sx;x<sx+canvas.width+gs;x+=gs){ctx.beginPath();ctx.moveTo(x,sy);ctx.lineTo(x,sy+canvas.height+gs);ctx.stroke();}
+    for(let y=sy;y<sy+canvas.height+gs;y+=gs){ctx.beginPath();ctx.moveTo(sx,y);ctx.lineTo(sx+canvas.width+gs,y);ctx.stroke();}
+
+    // Wires
+    wires.forEach(w=>{const fn=nodeById(w.fromNode),tn=nodeById(w.toNode);if(!fn||!tn)return;const p1=portP(fn,w.fromPort,'out'),p2=portP(tn,w.toPort,'in');drawWire(p1,p2,TC[fn.outputs[w.fromPort]]||'#fff',false);});
+
+    // Pending wire
+    if(wiringFrom){
+        const wn=nodeById(wiringFrom.nodeId);
+        if(wn){
+            const p1=portP(wn,wiringFrom.idx,wiringFrom.side);
+            const p2={x:lastMouse.x-cam.x,y:lastMouse.y-cam.y};
+            ctx.beginPath();ctx.moveTo(p1.x,p1.y);const cpx=(p1.x+p2.x)/2;
+            ctx.bezierCurveTo(cpx,p1.y,cpx,p2.y,p2.x,p2.y);
+            ctx.strokeStyle=TC[wiringFrom.dataType]+'88'||'#fff8';ctx.lineWidth=2;ctx.setLineDash([6,4]);ctx.stroke();ctx.setLineDash([]);
         }
     }
 
-    async function stepTick() {
-        await fetch('/api/tick', { method: 'POST' });
-        fetchGraph(); // Refresh values after tick
-    }
+    // Nodes
+    nodes.forEach((n,idx)=>{
+        const h=nodeH(n);
+        const isSys=n.system||false;
+        const isReg=n.kind==='Register';
+        const isSel=selectedNode&&selectedNode.id===n.id;
+        const isPreview=n.kind==='ShowStr'||n.kind==='ShowStream';
 
-    // --- Math Helpers ---
-    function getPortPos(nodeIndex, portIndex, side) {
-        const node = nodes[nodeIndex];
-        const x = (side === 'in') ? node.x : node.x + NODE_WIDTH;
-        const y = node.y + HEADER_HEIGHT + (portIndex + 1) * PORT_SPACING;
-        return { x, y };
-    }
+        // Body
+        if(isSys)ctx.fillStyle='#1a2a2a';
+        else if(isPreview)ctx.fillStyle='#2a2a30';
+        else if(isReg)ctx.fillStyle='#2a2a35';
+        else ctx.fillStyle='#333';
+        ctx.fillRect(n.x,n.y,NW,h);
 
-    // --- Rendering ---
-    function draw() {
-        ctx.fillStyle = "#1a1a1b";
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        // Header
+        if(isSys)ctx.fillStyle='#1a3a3a';
+        else if(isPreview)ctx.fillStyle='#1a2a3a';
+        else ctx.fillStyle='#222';
+        ctx.fillRect(n.x,n.y,NW,HH);
+        ctx.fillStyle=isSys?'#4ecdc4':isPreview?'#60a5fa':'#eee';
+        ctx.font='bold 11px Arial';
+        ctx.fillText(n.name.toUpperCase(),n.x+8,n.y+16);
 
-        ctx.save();
-        ctx.translate(camera.x, camera.y);
+        if(isSys){ctx.fillStyle='#4ecdc4';ctx.font='9px Arial';ctx.fillText('SYS',n.x+NW-30,n.y+15);}
 
-        // 1. Draw Wires (Bezier Curves)
-        wires.forEach(w => {
-            const start = getPortPos(w.fromNode, w.fromPort, 'out');
-            const end = getPortPos(w.toNode, w.toPort, 'in');
-            
-            ctx.beginPath();
-            ctx.moveTo(start.x, start.y);
-            // Control points for nice S-curve
-            const cp1x = start.x + (end.x - start.x) / 2;
-            const cp2x = start.x + (end.x - start.x) / 2;
-            ctx.bezierCurveTo(cp1x, start.y, cp2x, end.y, end.x, end.y);
-            
-            ctx.strokeStyle = "#ffffff44";
-            ctx.lineWidth = 2;
-            ctx.stroke();
+        // Input ports
+        n.inputs.forEach((type,pi)=>{
+            const pp=portP(n,pi,'in');
+            ctx.fillStyle=TC[type]||'#fff';ctx.beginPath();ctx.arc(pp.x,pp.y,PR,0,Math.PI*2);ctx.fill();
+            ctx.fillStyle='#000';ctx.font='bold 8px Arial';ctx.fillText(pi,pp.x-2,pp.y+3);
         });
 
-        // 2. Draw Nodes
-        nodes.forEach((node, idx) => {
-            // 1. Calculate dynamic height
-            // Base height + Ports + Config boxes
-            const portCount = Math.max(node.inputs.length, node.outputs.length);
-            const configKeys = Object.keys(node.config || {});
-
-            const portsHeight = (portCount + 1) * PORT_SPACING;
-            const configsHeight = configKeys.length * (CONFIG_BOX_HEIGHT + CONFIG_PADDING);
-            const nodeHeight = HEADER_HEIGHT + portsHeight + configsHeight + 5;
-        
-            // 2. Draw Node Body
-            ctx.fillStyle = (node.name === "Register") ? "#2a2a35" : "#333";
-            ctx.fillRect(node.x, node.y, NODE_WIDTH, nodeHeight);
-
-            // Header
-            ctx.fillStyle = "#222";
-            ctx.fillRect(node.x, node.y, NODE_WIDTH, HEADER_HEIGHT);
-            ctx.fillStyle = "#eee";
-            ctx.font = "bold 12px Arial";
-            ctx.fillText(node.name.toUpperCase(), node.x + 10, node.y + 17);
-
-            // Inputs (Left)
-            node.inputs.forEach((type, pIdx) => {
-                const pos = getPortPos(idx, pIdx, 'in');
-                ctx.fillStyle = TYPE_COLORS[type] || "#fff";
-                ctx.beginPath();
-                ctx.arc(pos.x, pos.y, PORT_RADIUS, 0, Math.PI * 2);
-                ctx.fill();
-            });
-
-            // Outputs (Right)
-            node.outputs.forEach((type, pIdx) => {
-                const pos = getPortPos(idx, pIdx, 'out');
-                ctx.fillStyle = TYPE_COLORS[type] || "#fff";
-                ctx.beginPath();
-                ctx.arc(pos.x, pos.y, PORT_RADIUS, 0, Math.PI * 2);
-                ctx.fill();
-            });
-        
-            // 3. Draw Config "Show Boxes"
-            let currentY = node.y + HEADER_HEIGHT + portsHeight;
-
-            configKeys.forEach(key => {
-                const val = node.config[key];
-
-                // Draw the dark background box
-                ctx.fillStyle = "#1a1a1b";
-                ctx.fillRect(node.x + 10, currentY, NODE_WIDTH - 20, CONFIG_BOX_HEIGHT);
-
-                // Draw the Label: Value text
-                ctx.fillStyle = "#aaa";
-                ctx.font = "10px monospace";
-                const displayText = `${key}: ${val}`;
-                ctx.fillText(displayText, node.x + 15, currentY + 12);
-
-                currentY += CONFIG_BOX_HEIGHT + CONFIG_PADDING;
-            });
-        
-            // Draw selection border
-            ctx.strokeStyle = (draggingNode === node) ? "#3b82f6" : "#555";
-            ctx.strokeRect(node.x, node.y, NODE_WIDTH, nodeHeight);
+        // Output ports
+        n.outputs.forEach((type,pi)=>{
+            const pp=portP(n,pi,'out');
+            ctx.fillStyle=TC[type]||'#fff';ctx.beginPath();ctx.arc(pp.x,pp.y,PR,0,Math.PI*2);ctx.fill();
+            ctx.fillStyle='#000';ctx.font='bold 8px Arial';ctx.fillText(pi,pp.x-2,pp.y+3);
         });
 
-        ctx.restore();
-        requestAnimationFrame(draw);
-    }
+        // Config display with text wrapping
+        let cy=n.y+HH+Math.max(n.inputs.length,n.outputs.length,1)*PG;
+        const innerW=NW-20;
+        const cfg=n.config||{};
+        ctx.font='10px monospace';
 
-    // --- Interaction ---
-    canvas.onmousedown = (e) => {
-        const mx = e.clientX - camera.x;
-        const my = e.clientY - camera.y;
+        for(const[key,val]of Object.entries(cfg)){
+            const lines=cfgLines(key,val,24);
+            const boxH=lines.length*LINE_H+4;
 
-        // Check for node click (Iterate backwards to grab top-most node)
-        draggingNode = nodes.slice().reverse().find(n => {
-            const h = HEADER_HEIGHT + (Math.max(n.inputs.length, n.outputs.length) + 1) * PORT_SPACING;
-            return mx > n.x && mx < n.x + NODE_WIDTH && my > n.y && my < n.y + h;
-        });
+            // Background box
+            ctx.fillStyle='#1a1a1b';
+            ctx.fillRect(n.x+8,cy,NW-16,boxH);
 
-        if (!draggingNode) isPanning = true;
-        lastMouse = { x: e.clientX, y: e.clientY };
-    };
-
-    window.onmousemove = (e) => {
-        const dx = e.clientX - lastMouse.x;
-        const dy = e.clientY - lastMouse.y;
-
-        if (draggingNode) {
-            draggingNode.x += dx;
-            draggingNode.y += dy;
-        } else if (isPanning) {
-            camera.x += dx;
-            camera.y += dy;
+            // Text lines
+            ctx.fillStyle=(isReg&&key==='current')?'#aaa':'#888';
+            for(let li=0;li<lines.length;li++){
+                ctx.fillText(lines[li],n.x+12,cy+12+li*LINE_H);
+            }
+            cy+=boxH+2;
         }
-        lastMouse = { x: e.clientX, y: e.clientY };
-    };
 
-    window.onmouseup = () => {
-        draggingNode = null;
-        isPanning = false;
-    };
+        // BREAK active indicator
+        if(isSys&&n.name==='BREAK'&&cfg.active){
+            ctx.fillStyle='rgba(239,68,68,0.3)';ctx.fillRect(n.x,n.y,NW,h);
+        }
 
-    // Stage 1: Sync current UI state to C++
-    async function syncWithBackend() {
-        const payload = {
-            nodes: nodes.map(n => ({
-                id: n.id,
-                x: n.x,
-                y: n.y,
-                config: n.config || {}
-            }))
-        };
-        
-        await fetch('/api/sync', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
-    }
-    
-    // Trigger sync only on mouse UP (end of drag)
-    window.onmouseup = () => {
-        if (draggingNode) syncWithBackend(); // Save final position
-        draggingNode = null;
-        isPanning = false;
-    };
-    
-    // Stage 2: Tell backend to write to file
-    async function saveToDisk() {
-        await syncWithBackend(); // Ensure backend is up to date first
-        const res = await fetch('/api/persist', { method: 'POST' });
-        alert(await res.text());
-    }
+        // Selection border
+        ctx.strokeStyle=isSel?'#3b82f6':isSys?'#4ecdc455':'#555';
+        ctx.lineWidth=isSel?2:1;ctx.strokeRect(n.x,n.y,NW,h);
+    });
 
-    // Initial load
-    fetchGraph();
-    draw();
+    ctx.restore();
+    requestAnimationFrame(draw);
+}
+
+fetchPalette();fetchGraph();draw();
 </script>
 </body>
 </html>

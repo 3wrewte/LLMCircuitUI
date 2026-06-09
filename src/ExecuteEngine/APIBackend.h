@@ -19,6 +19,34 @@ class APIBackend : public InferenceBackend {
         return size * nmemb;
     }
 
+    std::vector<std::string> split_into_tokens(const std::string& text) {
+        std::vector<std::string> tokens;
+        std::string current;
+
+        for (char c : text) {
+            if (c == ' ' || c == '\t') {
+                if (!current.empty()) {
+                    tokens.push_back(current);
+                    current.clear();
+                }
+                tokens.emplace_back(1, c);
+            } else if (c == '\n') {
+                if (!current.empty()) {
+                    tokens.push_back(current);
+                    current.clear();
+                }
+                tokens.emplace_back(1, '\n');
+            } else {
+                current += c;
+            }
+        }
+        if (!current.empty()) tokens.push_back(current);
+
+        if (tokens.empty()) tokens.emplace_back("");
+
+        return tokens;
+    }
+
 public:
     APIBackend(std::string key, std::string url, std::string mdl)
         : api_key(std::move(key)), base_url(std::move(url)), model(std::move(mdl)) {
@@ -40,6 +68,13 @@ public:
             return {};
         }
 
+        // Context format:
+        //   context[0] = system prompt string
+        //   context[1] = user input string (optional)
+        //   context[2..N-1] = previously generated token strings (the assistant reply so far)
+        //
+        // We reconstruct proper chat messages so the model sees a coherent conversation.
+
         Json::Value body;
         body["model"] = model;
         body["max_tokens"] = max_tokens;
@@ -48,25 +83,40 @@ public:
 
         Json::Value messages(Json::arrayValue);
 
-        if (context.size() == 1) {
-            Json::Value msg;
-            msg["role"] = "user";
-            msg["content"] = context[0];
-            messages.append(msg);
-        } else if (context.size() > 1) {
+        std::string system_prompt;
+        std::string user_text;
+        std::string assistant_so_far;
+
+        if (!context.empty()) {
+            system_prompt = context[0];
+        }
+        if (context.size() > 1) {
+            user_text = context[1];
+        }
+        for (size_t i = 2; i < context.size(); ++i) {
+            assistant_so_far += context[i];
+        }
+
+        // System message
+        if (!system_prompt.empty()) {
             Json::Value sys_msg;
             sys_msg["role"] = "system";
-            sys_msg["content"] = context[0];
+            sys_msg["content"] = system_prompt;
             messages.append(sys_msg);
+        }
 
-            std::string user_content;
-            for (size_t i = 1; i < context.size(); ++i) {
-                user_content += context[i];
-            }
-            Json::Value user_msg;
-            user_msg["role"] = "user";
-            user_msg["content"] = user_content;
-            messages.append(user_msg);
+        // User message
+        Json::Value user_msg;
+        user_msg["role"] = "user";
+        user_msg["content"] = user_text.empty() ? "Hello" : user_text;
+        messages.append(user_msg);
+
+        // Assistant prefix (previously generated tokens)
+        if (!assistant_so_far.empty()) {
+            Json::Value asst_msg;
+            asst_msg["role"] = "assistant";
+            asst_msg["content"] = assistant_so_far;
+            messages.append(asst_msg);
         }
 
         body["messages"] = messages;
@@ -78,7 +128,9 @@ public:
         std::string auth_header = "Authorization: Bearer " + api_key;
         std::string url = base_url + "/chat/completions";
 
-        std::cout << "[APIBackend] POST " << url << " max_tokens=" << max_tokens << std::endl;
+        std::cout << "[APIBackend] POST " << url << " max_tokens=" << max_tokens
+                  << " context_parts=" << context.size()
+                  << " asst_prefix=" << assistant_so_far.size() << " chars" << std::endl;
 
         std::string response;
         CURL* curl = curl_easy_init();
@@ -151,13 +203,8 @@ public:
         std::cout << "[APIBackend] response (" << content.size() << " chars): "
                   << content.substr(0, 120) << (content.size() > 120 ? "..." : "") << std::endl;
 
-        std::vector<std::string> tokens;
-        for (char c : content) {
-            tokens.emplace_back(1, c);
-        }
-        if (tokens.empty()) {
-            tokens.emplace_back("");
-        }
+        auto tokens = split_into_tokens(content);
+        std::cout << "[APIBackend] split into " << tokens.size() << " word-tokens" << std::endl;
 
         return tokens;
     }

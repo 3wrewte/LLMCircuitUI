@@ -185,6 +185,7 @@ private:
 
     std::vector<int> execution_order;
     std::vector<CompileError> compile_errors;
+    int break_source_wire = -1;
 
 public:
     std::function<void(int, const std::vector<Value>&, const std::vector<Value>&)> on_node_computed;
@@ -442,6 +443,10 @@ public:
             }
         }
 
+        if (break_source_wire >= 0) {
+            wires[SYS_BREAK] = wires[break_source_wire];
+        }
+
         for (auto& [id, reg] : registers) {
             reg.val = wires[reg.nxt_wire];
         }
@@ -451,8 +456,114 @@ public:
         return wires[SYS_BREAK].b;
     }
 
+    void set_break_source(int wire_id) {
+        break_source_wire = wire_id;
+    }
+
+    int get_break_source() const {
+        return break_source_wire;
+    }
+
     void set_wire(int id, Value v) {
         wires[id] = std::move(v);
+    }
+
+    // --- Dynamic Editing ---
+
+    int create_node_with_wires(const std::string& kind, const Json::Value& config = Json::Value()) {
+        auto comp = NodeFactory::create(kind);
+        if (!comp) return -1;
+        if (config.isObject() && !config.empty()) comp->load_config(config);
+
+        auto out_schema = comp->get_output_schema();
+        std::vector<int> out_ids;
+        for (auto type : out_schema) out_ids.push_back(add_wire(type));
+
+        auto in_schema = comp->get_input_schema();
+        std::vector<int> in_ids;
+        for (auto type : in_schema) in_ids.push_back(add_wire(type));
+
+        instances.push_back({std::move(comp), std::move(in_ids), std::move(out_ids)});
+        return (int)instances.size() - 1;
+    }
+
+    bool remove_node(int inst_idx) {
+        if (inst_idx < 0 || inst_idx >= (int)instances.size()) return false;
+
+        for (int ow : instances[inst_idx].out_wires) {
+            for (auto& other : instances) {
+                for (int& iw : other.in_wires) {
+                    if (iw == ow) iw = add_wire(wire_types[ow]);
+                }
+            }
+            for (auto& [id, reg] : registers) {
+                if (reg.nxt_wire == ow) reg.nxt_wire = add_wire(reg.val.type);
+            }
+        }
+
+        instances.erase(instances.begin() + inst_idx);
+        compile();
+        return true;
+    }
+
+    void connect_input(int inst_idx, int port_idx, int source_wire_id) {
+        if (inst_idx < 0 || inst_idx >= (int)instances.size()) return;
+        if (port_idx < 0 || port_idx >= (int)instances[inst_idx].in_wires.size()) return;
+        instances[inst_idx].in_wires[port_idx] = source_wire_id;
+    }
+
+    void disconnect_input(int inst_idx, int port_idx) {
+        if (inst_idx < 0 || inst_idx >= (int)instances.size()) return;
+        if (port_idx < 0 || port_idx >= (int)instances[inst_idx].in_wires.size()) return;
+        instances[inst_idx].in_wires[port_idx] = add_wire(instances[inst_idx].logic->get_input_schema()[port_idx]);
+    }
+
+    void connect_register_input(int reg_r_idx, int source_wire_id) {
+        int cnt = 0;
+        for (auto& [id, reg] : registers) {
+            if (cnt == reg_r_idx) { reg.nxt_wire = source_wire_id; return; }
+            cnt++;
+        }
+    }
+
+    void disconnect_register_input(int reg_r_idx) {
+        int cnt = 0;
+        for (auto& [id, reg] : registers) {
+            if (cnt == reg_r_idx) { reg.nxt_wire = add_wire(reg.val.type); return; }
+            cnt++;
+        }
+    }
+
+    int get_output_wire(int inst_idx, int port_idx) const {
+        if (inst_idx < 0 || inst_idx >= (int)instances.size()) return -1;
+        if (port_idx < 0 || port_idx >= (int)instances[inst_idx].out_wires.size()) return -1;
+        return instances[inst_idx].out_wires[port_idx];
+    }
+
+    int get_input_wire(int inst_idx, int port_idx) const {
+        if (inst_idx < 0 || inst_idx >= (int)instances.size()) return -1;
+        if (port_idx < 0 || port_idx >= (int)instances[inst_idx].in_wires.size()) return -1;
+        return instances[inst_idx].in_wires[port_idx];
+    }
+
+    int get_register_count() const { return (int)registers.size(); }
+
+    int get_register_cur_wire(int r_idx) const {
+        int cnt = 0;
+        for (auto& [id, reg] : registers) {
+            if (cnt == r_idx) return reg.cur_wire;
+            cnt++;
+        }
+        return -1;
+    }
+
+    int get_register_nxt_wire(int r_idx) const {
+        int cnt = 0;
+        for (auto& [id, reg] : registers) {
+            if (cnt == r_idx) return reg.nxt_wire;
+            cnt++;
+        }
+        return -1;
     }
 
     // --- Serialization ---
@@ -496,6 +607,8 @@ public:
             nodes_arr.append(n);
         }
         root["nodes"] = nodes_arr;
+
+        root["break_source_wire"] = break_source_wire;
 
         return root;
     }
@@ -559,6 +672,8 @@ public:
             for (auto& w : n["outputs"]) outs.push_back(w.asInt());
             eng->instances.push_back({std::move(comp), std::move(ins), std::move(outs)});
         }
+
+        eng->break_source_wire = root.get("break_source_wire", -1).asInt();
 
         return eng;
     }
@@ -866,3 +981,39 @@ public:
     std::vector<DataType> get_output_schema() const override { return {DataType::STRING}; }
 };
 REGISTER_NODE("Stream2Str", TokenStreamToStringNode);
+
+class ShowStrNode : public Component {
+public:
+    std::string display;
+
+    void compute(const std::vector<Value>& in, std::vector<Value>& out) override {
+        display = in[0].s;
+        out[0] = in[0];
+    }
+    void save_config(Json::Value& config) const override { config["display"] = display; }
+    void load_config(const Json::Value& config) override { display = config.get("display", "").asString(); }
+    std::string get_name() const override { return "ShowStr"; }
+    std::string get_kind() const override { return "ShowStr"; }
+    std::vector<DataType> get_input_schema() const override { return {DataType::STRING}; }
+    std::vector<DataType> get_output_schema() const override { return {DataType::STRING}; }
+};
+REGISTER_NODE("ShowStr", ShowStrNode);
+
+class ShowTokenStreamNode : public Component {
+public:
+    std::string display;
+
+    void compute(const std::vector<Value>& in, std::vector<Value>& out) override {
+        std::string r;
+        for (auto& t : in[0].tokens) r += t;
+        display = r;
+        out[0] = in[0];
+    }
+    void save_config(Json::Value& config) const override { config["display"] = display; }
+    void load_config(const Json::Value& config) override { display = config.get("display", "").asString(); }
+    std::string get_name() const override { return "ShowStream"; }
+    std::string get_kind() const override { return "ShowStream"; }
+    std::vector<DataType> get_input_schema() const override { return {DataType::TOKEN_STREAM}; }
+    std::vector<DataType> get_output_schema() const override { return {DataType::TOKEN_STREAM}; }
+};
+REGISTER_NODE("ShowStream", ShowTokenStreamNode);
