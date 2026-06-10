@@ -75,7 +75,7 @@ const canvas = document.getElementById('blueprint');
 const ctx = canvas.getContext('2d');
 const NW = 180, PR = 6, HH = 24, PG = 22, LINE_H = 14;
 const TC = {0:"#3b82f6",1:"#ef4444",2:"#10b981",3:"#f59e0b",4:"#e879f9",5:"#c084fc",6:"#fb923c"};
-const TN = {0:"INT",1:"BOOL",2:"STR",3:"TOK",4:"STREAM",5:"CTX",6:"?"};
+const TN = {0:"INT",1:"BOOL",2:"STR",3:"TOK",4:"STREAM",5:"CTX",6:"TKID"};
 
 let cam={x:0,y:0}, nodes=[], wires=[], palTypes=[], runningLoop=false;
 let isPanning=false, draggingNode=null, lastMouse={x:0,y:0}, selectedNode=null;
@@ -106,7 +106,7 @@ async function fetchPalette(){
         const list=document.getElementById('palette-list'); list.innerHTML='';
         const groups={LLM:[],Convert:[],Logic:[],Input:[],Display:[]};
         const gmap={LLMInfer:0,TokenAccum:0,ContextBuild:0,StopCond:0,
-            Token2Str:1,Str2Token:1,Str2Stream:1,Stream2Str:1,TokenMatch:1,
+            Token2Str:1,Str2Token:1,Str2Stream:1,Stream2Str:1,TokenMatch:1,Tokenizer:1,Detokenize:1,
             Mux:2,And:2,Not:2,Threshold:2,Adder:2,
             StrConst:3,Constant:3,BoolConst:3,UserInput:3,
             ShowStr:4,ShowStream:4};
@@ -153,8 +153,12 @@ function wrapText(text, maxChars) {
 function cfgLines(key, val, maxChars) {
     let display = '';
     if (Array.isArray(val)) {
-        const joined = val.slice(0, 20).join('');
-        display = joined.length > 40 ? joined.substring(0, 37) + '...' : joined;
+        if (val.length > 0 && typeof val[0] === 'number')
+            display = val.slice(0, 10).join(',') + (val.length > 10 ? ',...' : '');
+        else {
+            const joined = val.slice(0, 20).join('');
+            display = joined.length > 40 ? joined.substring(0, 37) + '...' : joined;
+        }
     }
     else if (typeof val === 'boolean') display = val ? 'true' : 'false';
     else display = String(val);

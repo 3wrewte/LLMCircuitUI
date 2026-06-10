@@ -7,8 +7,11 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # 1. Include Drogon (Internal Libs)
 add_subdirectory(libs/drogon)
 
-# 2. Find libcurl
-find_package(CURL REQUIRED)
+# 2. Include llama.cpp (CPU backend by default)
+# For Vulkan GPU: run cmake with -DGGML_VULKAN=ON
+# For CUDA GPU: run cmake with -DGGML_CUDA=ON
+set(GGML_VULKAN OFF CACHE BOOL "Enable Vulkan GPU backend")
+add_subdirectory(libs/llama.cpp)
 
 # 3. Source Files
 set(SOURCE_FILES 
@@ -20,10 +23,12 @@ set(SOURCE_FILES
 add_executable(${PROJECT_NAME} ${SOURCE_FILES})
 
 # 5. Link Dependencies
-target_link_libraries(${PROJECT_NAME} PRIVATE drogon CURL::libcurl)
+target_link_libraries(${PROJECT_NAME} PRIVATE drogon llama)
 
 # 6. Include Paths
 target_include_directories(${PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ExecuteEngine
+    ${CMAKE_CURRENT_SOURCE_DIR}/libs/llama.cpp/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/libs/llama.cpp/ggml/include
 )

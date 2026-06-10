@@ -129,7 +129,7 @@ public:
             else if (reg.val.type == DataType::TOKEN) config["current"] = reg.val.s;
             else if (reg.val.type == DataType::TOKEN_STREAM || reg.val.type == DataType::CONTEXT_BUFFER) {
                 Json::Value arr(Json::arrayValue);
-                for (size_t t = 0; t < reg.val.tokens.size() && t < 20; ++t) arr.append(reg.val.tokens[t]);
+                for (size_t t = 0; t < reg.val.token_ids.size() && t < 20; ++t) arr.append(reg.val.token_ids[t]);
                 config["current"] = arr;
             }
             regJson["config"] = config;

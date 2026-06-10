@@ -12,7 +12,7 @@
 
 enum SysWireID { SYS_CLK = 0, SYS_RST = 1, SYS_BREAK = 2, USER_START = 10 };
 
-enum class DataType { INT, BOOL, STRING, TOKEN, TOKEN_STREAM, CONTEXT_BUFFER };
+enum class DataType { INT, BOOL, STRING, TOKEN, TOKEN_STREAM, CONTEXT_BUFFER, TOKEN_ID };
 
 inline std::string datatype_to_str(DataType t) {
     switch (t) {
@@ -22,6 +22,7 @@ inline std::string datatype_to_str(DataType t) {
         case DataType::TOKEN: return "TOKEN";
         case DataType::TOKEN_STREAM: return "TOKEN_STREAM";
         case DataType::CONTEXT_BUFFER: return "CONTEXT_BUFFER";
+        case DataType::TOKEN_ID: return "TOKEN_ID";
     }
     return "UNKNOWN";
 }
@@ -33,6 +34,7 @@ inline DataType str_to_datatype(const std::string& s) {
     if (s == "TOKEN") return DataType::TOKEN;
     if (s == "TOKEN_STREAM") return DataType::TOKEN_STREAM;
     if (s == "CONTEXT_BUFFER") return DataType::CONTEXT_BUFFER;
+    if (s == "TOKEN_ID") return DataType::TOKEN_ID;
     return DataType::INT;
 }
 
@@ -41,7 +43,7 @@ struct Value {
     int i = 0;
     bool b = false;
     std::string s;
-    std::vector<std::string> tokens;
+    std::vector<int> token_ids;
 
     Value() : type(DataType::INT) {}
     Value(int v) : type(DataType::INT), i(v) {}
@@ -51,17 +53,20 @@ struct Value {
     static Value token(const std::string& t) {
         Value v; v.type = DataType::TOKEN; v.s = t; return v;
     }
-    static Value token_stream(const std::vector<std::string>& ts) {
-        Value v; v.type = DataType::TOKEN_STREAM; v.tokens = ts; return v;
+    static Value token_id(int id) {
+        Value v; v.type = DataType::TOKEN_ID; v.i = id; return v;
     }
-    static Value token_stream(std::vector<std::string>&& ts) {
-        Value v; v.type = DataType::TOKEN_STREAM; v.tokens = std::move(ts); return v;
+    static Value token_stream(const std::vector<int>& ts) {
+        Value v; v.type = DataType::TOKEN_STREAM; v.token_ids = ts; return v;
     }
-    static Value context_buffer(const std::vector<std::string>& cb) {
-        Value v; v.type = DataType::CONTEXT_BUFFER; v.tokens = cb; return v;
+    static Value token_stream(std::vector<int>&& ts) {
+        Value v; v.type = DataType::TOKEN_STREAM; v.token_ids = std::move(ts); return v;
     }
-    static Value context_buffer(std::vector<std::string>&& cb) {
-        Value v; v.type = DataType::CONTEXT_BUFFER; v.tokens = std::move(cb); return v;
+    static Value context_buffer(const std::vector<int>& cb) {
+        Value v; v.type = DataType::CONTEXT_BUFFER; v.token_ids = cb; return v;
+    }
+    static Value context_buffer(std::vector<int>&& cb) {
+        Value v; v.type = DataType::CONTEXT_BUFFER; v.token_ids = std::move(cb); return v;
     }
 
     Json::Value to_json() const {
@@ -72,10 +77,11 @@ struct Value {
             case DataType::BOOL: j["value"] = b; break;
             case DataType::STRING: j["value"] = s; break;
             case DataType::TOKEN: j["value"] = s; break;
+            case DataType::TOKEN_ID: j["value"] = i; break;
             case DataType::TOKEN_STREAM:
             case DataType::CONTEXT_BUFFER: {
                 Json::Value arr(Json::arrayValue);
-                for (auto& t : tokens) arr.append(t);
+                for (auto& id : token_ids) arr.append(id);
                 j["value"] = arr;
                 break;
             }
@@ -91,15 +97,16 @@ struct Value {
             case DataType::BOOL: return Value(v.asBool());
             case DataType::STRING: return Value(v.asString());
             case DataType::TOKEN: return Value::token(v.asString());
+            case DataType::TOKEN_ID: return Value::token_id(v.asInt());
             case DataType::TOKEN_STREAM: {
-                std::vector<std::string> ts;
-                for (auto& e : v) ts.push_back(e.asString());
-                return Value::token_stream(std::move(ts));
+                std::vector<int> ids;
+                for (auto& e : v) ids.push_back(e.asInt());
+                return Value::token_stream(std::move(ids));
             }
             case DataType::CONTEXT_BUFFER: {
-                std::vector<std::string> ts;
-                for (auto& e : v) ts.push_back(e.asString());
-                return Value::context_buffer(std::move(ts));
+                std::vector<int> ids;
+                for (auto& e : v) ids.push_back(e.asInt());
+                return Value::context_buffer(std::move(ids));
             }
         }
         return Value(0);
@@ -197,8 +204,9 @@ public:
             case DataType::BOOL: wires[id] = Value(false); break;
             case DataType::STRING: wires[id] = Value(std::string("")); break;
             case DataType::TOKEN: wires[id] = Value::token(""); break;
-            case DataType::TOKEN_STREAM: wires[id] = Value::token_stream(std::vector<std::string>{}); break;
-            case DataType::CONTEXT_BUFFER: wires[id] = Value::context_buffer(std::vector<std::string>{}); break;
+            case DataType::TOKEN_ID: wires[id] = Value::token_id(-1); break;
+            case DataType::TOKEN_STREAM: wires[id] = Value::token_stream(std::vector<int>{}); break;
+            case DataType::CONTEXT_BUFFER: wires[id] = Value::context_buffer(std::vector<int>{}); break;
             default: wires[id] = Value(0); break;
         }
         return id;
@@ -627,8 +635,9 @@ public:
                 case DataType::BOOL: v = Value(false); break;
                 case DataType::STRING: v = Value(std::string("")); break;
                 case DataType::TOKEN: v = Value::token(""); break;
-                case DataType::TOKEN_STREAM: v = Value::token_stream(std::vector<std::string>{}); break;
-                case DataType::CONTEXT_BUFFER: v = Value::context_buffer(std::vector<std::string>{}); break;
+                case DataType::TOKEN_ID: v = Value::token_id(-1); break;
+                case DataType::TOKEN_STREAM: v = Value::token_stream(std::vector<int>{}); break;
+                case DataType::CONTEXT_BUFFER: v = Value::context_buffer(std::vector<int>{}); break;
                 default: v = Value(0); break;
             }
             eng->wires[id] = v;
@@ -746,21 +755,25 @@ class LLMInferNode : public Component {
 public:
     std::string model_name = "stub";
     float temperature = 0.7f;
-    std::function<std::string(const std::vector<std::string>&)> infer_callback;
+    std::function<std::pair<std::string,int>(const std::vector<int>&)> infer_callback;
 
     void compute(const std::vector<Value>& in, std::vector<Value>& out) override {
         if (infer_callback) {
-            out[0] = Value::token(infer_callback(in[0].tokens));
+            auto [text, id] = infer_callback(in[0].token_ids);
+            out[0] = Value::token(text);
+            out[1] = Value::token_id(id);
         } else {
             static int counter = 0;
-            out[0] = Value::token("[stub_" + std::to_string(counter++) + "]");
+            out[0] = Value::token("[stub_" + std::to_string(counter) + "]");
+            out[1] = Value::token_id(-1);
+            counter++;
         }
     }
 
     std::string get_name() const override { return "LLMInfer"; }
     std::string get_kind() const override { return "LLMInfer"; }
     std::vector<DataType> get_input_schema() const override { return {DataType::CONTEXT_BUFFER}; }
-    std::vector<DataType> get_output_schema() const override { return {DataType::TOKEN}; }
+    std::vector<DataType> get_output_schema() const override { return {DataType::TOKEN, DataType::TOKEN_ID}; }
 
     void save_config(Json::Value& config) const override {
         config["model"] = model_name;
@@ -776,13 +789,13 @@ REGISTER_NODE("LLMInfer", LLMInferNode);
 class TokenAccumNode : public Component {
 public:
     void compute(const std::vector<Value>& in, std::vector<Value>& out) override {
-        auto stream = in[0].tokens;
-        stream.push_back(in[1].s);
+        auto stream = in[0].token_ids;
+        stream.push_back(in[1].i);
         out[0] = Value::token_stream(std::move(stream));
     }
     std::string get_name() const override { return "TokenAccum"; }
     std::string get_kind() const override { return "TokenAccum"; }
-    std::vector<DataType> get_input_schema() const override { return {DataType::TOKEN_STREAM, DataType::TOKEN}; }
+    std::vector<DataType> get_input_schema() const override { return {DataType::TOKEN_STREAM, DataType::TOKEN_ID}; }
     std::vector<DataType> get_output_schema() const override { return {DataType::TOKEN_STREAM}; }
 };
 REGISTER_NODE("TokenAccum", TokenAccumNode);
@@ -793,14 +806,12 @@ public:
     explicit ContextBuildNode(int n = 2) : num_inputs(n) {}
 
     void compute(const std::vector<Value>& in, std::vector<Value>& out) override {
-        std::vector<std::string> result;
+        std::vector<int> result;
         for (const auto& v : in) {
             if (v.type == DataType::TOKEN_STREAM || v.type == DataType::CONTEXT_BUFFER) {
-                result.insert(result.end(), v.tokens.begin(), v.tokens.end());
-            } else if (v.type == DataType::STRING) {
-                result.push_back(v.s);
-            } else if (v.type == DataType::TOKEN) {
-                result.push_back(v.s);
+                result.insert(result.end(), v.token_ids.begin(), v.token_ids.end());
+            } else if (v.type == DataType::TOKEN_ID) {
+                result.push_back(v.i);
             }
         }
         out[0] = Value::context_buffer(std::move(result));
@@ -844,8 +855,14 @@ REGISTER_NODE("Str2Token", StringToTokenNode);
 
 class StringToTokenStreamNode : public Component {
 public:
+    std::function<std::vector<int>(const std::string&)> tokenize_callback;
+
     void compute(const std::vector<Value>& in, std::vector<Value>& out) override {
-        out[0] = Value::token_stream(std::vector<std::string>{in[0].s});
+        if (tokenize_callback) {
+            out[0] = Value::token_stream(tokenize_callback(in[0].s));
+        } else {
+            out[0] = Value::token_stream(std::vector<int>{});
+        }
     }
     std::string get_name() const override { return "Str2Stream"; }
     std::string get_kind() const override { return "Str2Stream"; }
@@ -853,6 +870,42 @@ public:
     std::vector<DataType> get_output_schema() const override { return {DataType::TOKEN_STREAM}; }
 };
 REGISTER_NODE("Str2Stream", StringToTokenStreamNode);
+
+class TokenizerNode : public Component {
+public:
+    std::function<std::vector<int>(const std::string&)> tokenize_callback;
+
+    void compute(const std::vector<Value>& in, std::vector<Value>& out) override {
+        if (tokenize_callback) {
+            out[0] = Value::token_stream(tokenize_callback(in[0].s));
+        } else {
+            out[0] = Value::token_stream(std::vector<int>{});
+        }
+    }
+    std::string get_name() const override { return "Tokenizer"; }
+    std::string get_kind() const override { return "Tokenizer"; }
+    std::vector<DataType> get_input_schema() const override { return {DataType::STRING}; }
+    std::vector<DataType> get_output_schema() const override { return {DataType::TOKEN_STREAM}; }
+};
+REGISTER_NODE("Tokenizer", TokenizerNode);
+
+class DetokenizeNode : public Component {
+public:
+    std::function<std::string(int)> detokenize_callback;
+
+    void compute(const std::vector<Value>& in, std::vector<Value>& out) override {
+        if (detokenize_callback) {
+            out[0] = Value(detokenize_callback(in[0].i));
+        } else {
+            out[0] = Value(std::string());
+        }
+    }
+    std::string get_name() const override { return "Detokenize"; }
+    std::string get_kind() const override { return "Detokenize"; }
+    std::vector<DataType> get_input_schema() const override { return {DataType::TOKEN_ID}; }
+    std::vector<DataType> get_output_schema() const override { return {DataType::STRING}; }
+};
+REGISTER_NODE("Detokenize", DetokenizeNode);
 
 class TokenMatchNode : public Component {
 public:
@@ -970,9 +1023,15 @@ REGISTER_NODE("Not", NotNode);
 
 class TokenStreamToStringNode : public Component {
 public:
+    std::function<std::string(int)> detokenize_callback;
+
     void compute(const std::vector<Value>& in, std::vector<Value>& out) override {
         std::string result;
-        for (auto& t : in[0].tokens) result += t;
+        if (detokenize_callback) {
+            for (auto& id : in[0].token_ids) result += detokenize_callback(id);
+        } else {
+            for (auto& id : in[0].token_ids) result += "[" + std::to_string(id) + "]";
+        }
         out[0] = Value(result);
     }
     std::string get_name() const override { return "Stream2Str"; }
@@ -1002,10 +1061,15 @@ REGISTER_NODE("ShowStr", ShowStrNode);
 class ShowTokenStreamNode : public Component {
 public:
     std::string display;
+    std::function<std::string(int)> detokenize_callback;
 
     void compute(const std::vector<Value>& in, std::vector<Value>& out) override {
         std::string r;
-        for (auto& t : in[0].tokens) r += t;
+        if (detokenize_callback) {
+            for (auto& id : in[0].token_ids) r += detokenize_callback(id);
+        } else {
+            for (auto& id : in[0].token_ids) r += "[" + std::to_string(id) + "]";
+        }
         display = r;
         out[0] = in[0];
     }

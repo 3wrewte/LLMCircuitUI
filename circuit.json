@@ -8,7 +8,8 @@
     { "id": 104, "type": "CONTEXT_BUFFER" },
     { "id": 105, "type": "TOKEN" },
     { "id": 106, "type": "STRING" },
-    { "id": 107, "type": "BOOL" }
+    { "id": 107, "type": "BOOL" },
+    { "id": 111, "type": "TOKEN_ID" }
   ],
   "registers": [
     {
@@ -32,12 +33,12 @@
       "config": { "value": "Hello!" }
     },
     {
-      "kind": "Str2Stream",
+      "kind": "Tokenizer",
       "inputs": [100],
       "outputs": [102]
     },
     {
-      "kind": "Str2Stream",
+      "kind": "Tokenizer",
       "inputs": [101],
       "outputs": [103]
     },
@@ -50,24 +51,24 @@
     {
       "kind": "LLMInfer",
       "inputs": [104],
-      "outputs": [105],
-      "config": { "model": "Qwen/Qwen3-8B", "temperature": 0.7 }
+      "outputs": [105, 111],
+      "config": { "model": "Qwen3.5-2B", "temperature": 0.7 }
     },
     {
       "kind": "TokenAccum",
-      "inputs": [109, 105],
+      "inputs": [109, 111],
       "outputs": [110]
     },
     {
-      "kind": "Token2Str",
-      "inputs": [105],
+      "kind": "Detokenize",
+      "inputs": [111],
       "outputs": [106]
     },
     {
       "kind": "StopCond",
       "inputs": [105],
       "outputs": [107],
-      "config": { "stop_tokens": ["\n\n", "<|im_end|>", "</s>"] }
+      "config": { "stop_tokens": ["<|im_end|>", "<|endoftext|>", "\n\n"] }
     }
   ]
 }

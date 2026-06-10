@@ -2,8 +2,7 @@
 
 #include "../LogicEngine.h"
 #include "InferenceBackend.h"
-#include "APIBackend.h"
-#include "TokenCache.h"
+#include "LlamaBackend.h"
 #include <memory>
 #include <mutex>
 #include <atomic>
@@ -12,14 +11,11 @@
 #include <fstream>
 #include <iostream>
 #include <json/json.h>
-#include <curl/curl.h>
 
 class ExecuteEngine {
     std::unique_ptr<LogicEngine> logic;
     std::unique_ptr<InferenceBackend> backend;
-    TokenCache cache;
 
-    int batch_size = 8;
     float default_temperature = 0.7f;
     int tick_count = 0;
     bool verbose = true;
@@ -29,47 +25,46 @@ class ExecuteEngine {
     std::atomic<bool> run_loop_active{false};
 
     void configure_llm_nodes() {
+        auto* be = backend.get();
         for (auto& inst : logic->get_instances_mut()) {
-            auto* llm = dynamic_cast<LLMInferNode*>(inst.logic.get());
-            if (!llm) continue;
-
-            auto* be = backend.get();
-            auto* ca = &cache;
-            int bs = batch_size;
-            float temp = default_temperature;
-            bool vb = verbose;
-
-            llm->infer_callback = [be, ca, bs, temp, vb](
-                const std::vector<std::string>& context) -> std::string {
-
-                auto cached = ca->try_get(context);
-                if (cached) {
-                    if (vb) std::cout << "  [CACHE HIT]" << std::endl;
-                    return *cached;
-                }
-
-                if (!be || !be->is_ready()) {
-                    static int stub_counter = 0;
-                    return "[stub_" + std::to_string(stub_counter++) + "]";
-                }
-
-                if (vb) std::cout << "  [CACHE MISS] calling API batch=" << bs << std::endl;
-                auto tokens = be->infer(context, bs, temp);
-
-                if (tokens.empty()) {
-                    return "[api_error]";
-                }
-
-                if ((int)tokens.size() > 1) {
-                    ca->store_batch(context, tokens);
-                    if (vb) {
-                        std::cout << "  [BATCH] stored " << tokens.size()
-                                  << " tokens in cache" << std::endl;
+            if (auto* llm = dynamic_cast<LLMInferNode*>(inst.logic.get())) {
+                float temp = default_temperature;
+                llm->infer_callback = [be, temp](
+                    const std::vector<int>& ctx) -> std::pair<std::string,int> {
+                    if (!be || !be->is_ready()) {
+                        static int n = 0;
+                        std::string stub = "[stub_" + std::to_string(n++) + "]";
+                        return {stub, -1};
                     }
-                }
-
-                return tokens[0];
-            };
+                    auto [id, text] = be->infer_step(ctx, temp);
+                    return {text, id};
+                };
+            }
+            if (auto* tok = dynamic_cast<TokenizerNode*>(inst.logic.get())) {
+                tok->tokenize_callback = [be](const std::string& s) {
+                    return be ? be->tokenize(s, false) : std::vector<int>{};
+                };
+            }
+            if (auto* dtk = dynamic_cast<DetokenizeNode*>(inst.logic.get())) {
+                dtk->detokenize_callback = [be](int id) {
+                    return be ? be->detokenize(id) : std::string();
+                };
+            }
+            if (auto* sts = dynamic_cast<TokenStreamToStringNode*>(inst.logic.get())) {
+                sts->detokenize_callback = [be](int id) {
+                    return be ? be->detokenize(id) : std::string("[" + std::to_string(id) + "]");
+                };
+            }
+            if (auto* sst = dynamic_cast<ShowTokenStreamNode*>(inst.logic.get())) {
+                sst->detokenize_callback = [be](int id) {
+                    return be ? be->detokenize(id) : std::string("[" + std::to_string(id) + "]");
+                };
+            }
+            if (auto* sts2 = dynamic_cast<StringToTokenStreamNode*>(inst.logic.get())) {
+                sts2->tokenize_callback = [be](const std::string& s) {
+                    return be ? be->tokenize(s, false) : std::vector<int>{};
+                };
+            }
         }
     }
 
@@ -79,22 +74,23 @@ class ExecuteEngine {
             case DataType::BOOL: std::cout << (v.b ? "true" : "false"); break;
             case DataType::STRING: std::cout << "\"" << v.s << "\""; break;
             case DataType::TOKEN: std::cout << "tok(\"" << v.s << "\")"; break;
+            case DataType::TOKEN_ID: std::cout << "tkid(" << v.i << ")"; break;
             case DataType::TOKEN_STREAM:
-                std::cout << "stream[" << v.tokens.size() << "]{";
-                for (size_t i = 0; i < v.tokens.size() && i < 5; ++i) {
+                std::cout << "stream[" << v.token_ids.size() << "]{";
+                for (size_t i = 0; i < v.token_ids.size() && i < 5; ++i) {
                     if (i > 0) std::cout << ",";
-                    std::cout << "\"" << v.tokens[i] << "\"";
+                    std::cout << v.token_ids[i];
                 }
-                if (v.tokens.size() > 5) std::cout << ",...";
+                if (v.token_ids.size() > 5) std::cout << ",...";
                 std::cout << "}";
                 break;
             case DataType::CONTEXT_BUFFER:
-                std::cout << "ctx[" << v.tokens.size() << "]{";
-                for (size_t i = 0; i < v.tokens.size() && i < 3; ++i) {
+                std::cout << "ctx[" << v.token_ids.size() << "]{";
+                for (size_t i = 0; i < v.token_ids.size() && i < 8; ++i) {
                     if (i > 0) std::cout << ",";
-                    std::cout << "\"" << v.tokens[i].substr(0, 30) << (v.tokens[i].size() > 30 ? "..." : "") << "\"";
+                    std::cout << v.token_ids[i];
                 }
-                if (v.tokens.size() > 3) std::cout << ",...";
+                if (v.token_ids.size() > 8) std::cout << ",...";
                 std::cout << "}";
                 break;
         }
@@ -186,7 +182,7 @@ class ExecuteEngine {
         logic = std::move(new_engine);
         configure_llm_nodes();
         tick_count = 0;
-        cache.invalidate_all();
+        if (backend) backend->reset();
         std::cout << "  Loaded: " << path << " ("
                   << logic->get_instances().size() << " nodes, "
                   << logic->get_registers().size() << " regs)" << std::endl;
@@ -252,8 +248,6 @@ class ExecuteEngine {
                     print_value(reg.val);
                     std::cout << std::endl;
                 }
-            } else if (cmd == "cache" || cmd == "c") {
-                cache.print_stats();
             } else if (cmd == "load") {
                 std::string path;
                 iss >> path;
@@ -308,28 +302,22 @@ class ExecuteEngine {
 
 public:
     struct Config {
-        std::string api_key;
-        std::string base_url = "https://api.siliconflow.com/v1";
-        std::string model = "Qwen/Qwen3-8B";
-        int batch_size = 8;
+        std::string model_path;
+        int n_gpu_layers = 0;
         float temperature = 0.7f;
         bool verbose = true;
     };
 
     ExecuteEngine(std::unique_ptr<LogicEngine> eng, Config cfg)
         : logic(std::move(eng)),
-          batch_size(cfg.batch_size),
           default_temperature(cfg.temperature),
           verbose(cfg.verbose) {
 
-        curl_global_init(CURL_GLOBAL_DEFAULT);
-
-        if (!cfg.api_key.empty() && cfg.api_key != "PASTE_YOUR_API_KEY_HERE") {
-            backend = std::make_unique<APIBackend>(
-                cfg.api_key, cfg.base_url, cfg.model);
-            std::cout << "[ExecuteEngine] API backend configured" << std::endl;
+        if (!cfg.model_path.empty()) {
+            backend = std::make_unique<LlamaBackend>(cfg.model_path, cfg.n_gpu_layers);
+            std::cout << "[ExecuteEngine] Llama backend configured" << std::endl;
         } else {
-            std::cout << "[ExecuteEngine] No API key — running in STUB mode" << std::endl;
+            std::cout << "[ExecuteEngine] No model path — running in STUB mode" << std::endl;
         }
 
         configure_llm_nodes();
@@ -338,7 +326,6 @@ public:
     ~ExecuteEngine() {
         running = false;
         run_loop_active = false;
-        curl_global_cleanup();
     }
 
     LogicEngine* get_logic() { return logic.get(); }
@@ -378,13 +365,14 @@ public:
                 case DataType::BOOL: reg.val = Value(false); break;
                 case DataType::STRING: reg.val = Value(std::string("")); break;
                 case DataType::TOKEN: reg.val = Value::token(""); break;
-                case DataType::TOKEN_STREAM: reg.val = Value::token_stream(std::vector<std::string>{}); break;
-                case DataType::CONTEXT_BUFFER: reg.val = Value::context_buffer(std::vector<std::string>{}); break;
+                case DataType::TOKEN_ID: reg.val = Value::token_id(-1); break;
+                case DataType::TOKEN_STREAM: reg.val = Value::token_stream(std::vector<int>{}); break;
+                case DataType::CONTEXT_BUFFER: reg.val = Value::context_buffer(std::vector<int>{}); break;
             }
         }
         tick_count = 0;
-        cache.invalidate_all();
-        std::cout << "  Registers reset, cache cleared" << std::endl;
+        if (backend) backend->reset();
+        std::cout << "  Registers and KV cache reset" << std::endl;
     }
 
     // --- Replace engine (for undo/redo) ---
@@ -433,10 +421,8 @@ public:
             return cfg;
         }
 
-        cfg.api_key = root.get("api_key", "").asString();
-        cfg.base_url = root.get("base_url", "https://api.siliconflow.com/v1").asString();
-        cfg.model = root.get("model", "Qwen/Qwen3-8B").asString();
-        cfg.batch_size = root.get("batch_size", 8).asInt();
+        cfg.model_path = root.get("model_path", "").asString();
+        cfg.n_gpu_layers = root.get("n_gpu_layers", 0).asInt();
         cfg.temperature = root.get("temperature", 0.7).asFloat();
         cfg.verbose = root.get("verbose", true).asBool();
 

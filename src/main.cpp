@@ -9,32 +9,32 @@ static std::unique_ptr<LogicEngine> build_demo_circuit() {
 
     // Auto-regressive LLM loop with user input:
     //
-    // StrConst(system prompt) → Str2Stream ──┐
-    //                                         ├→ ContextBuild → LLMInfer →┬→ TokenAccum → Reg[TOKEN_STREAM]
-    // UserInput → Str2Stream ─────────────────┘                           ├→ Token2Str
-    //                                                                     └→ StopCond → And → SYS_BREAK
-    //                                                                     └→ (Not → rst_mux_sel)  -- future
+    // StrConst(system prompt) → Tokenizer ──┐
+    //                                        ├→ ContextBuild → LLMInfer →┬→ TokenAccum → Reg[TOKEN_STREAM]
+    // UserInput → Tokenizer ───────────────┘                            ├→ Detokenize → StopCond → SYS_BREAK
+    //                                                                   └→ TOKEN_ID → TokenAccum
 
     auto [hist_cur, hist_nxt] = engine->add_register(
-        DataType::TOKEN_STREAM, Value::token_stream(std::vector<std::string>{}));
+        DataType::TOKEN_STREAM, Value::token_stream(std::vector<int>{}));
 
-    int w_sysprompt = engine->add_wire(DataType::STRING);
-    int w_sysstream = engine->add_wire(DataType::TOKEN_STREAM);
-    int w_userinput = engine->add_wire(DataType::STRING);
+    int w_sysprompt  = engine->add_wire(DataType::STRING);
+    int w_sysstream  = engine->add_wire(DataType::TOKEN_STREAM);
+    int w_userinput  = engine->add_wire(DataType::STRING);
     int w_userstream = engine->add_wire(DataType::TOKEN_STREAM);
-    int w_context   = engine->add_wire(DataType::CONTEXT_BUFFER);
-    int w_token     = engine->add_wire(DataType::TOKEN);
-    int w_output    = engine->add_wire(DataType::STRING);
-    int w_stop      = engine->add_wire(DataType::BOOL);
+    int w_context    = engine->add_wire(DataType::CONTEXT_BUFFER);
+    int w_token      = engine->add_wire(DataType::TOKEN);
+    int w_token_id   = engine->add_wire(DataType::TOKEN_ID);
+    int w_output     = engine->add_wire(DataType::STRING);
+    int w_stop       = engine->add_wire(DataType::BOOL);
 
     engine->add_node(std::make_unique<StringConstantNode>("You are a helpful AI."), {}, {w_sysprompt});
     engine->add_node(std::make_unique<UserInputNode>(), {}, {w_userinput});
-    engine->add_node(std::make_unique<StringToTokenStreamNode>(), {w_sysprompt}, {w_sysstream});
-    engine->add_node(std::make_unique<StringToTokenStreamNode>(), {w_userinput}, std::vector<int>{w_userstream});
+    engine->add_node(std::make_unique<TokenizerNode>(), {w_sysprompt}, {w_sysstream});
+    engine->add_node(std::make_unique<TokenizerNode>(), {w_userinput}, std::vector<int>{w_userstream});
     engine->add_node(std::make_unique<ContextBuildNode>(3), std::vector<int>{w_sysstream, w_userstream, hist_cur}, std::vector<int>{w_context});
-    engine->add_node(std::make_unique<LLMInferNode>(), {w_context}, {w_token});
-    engine->add_node(std::make_unique<TokenAccumNode>(), std::vector<int>{hist_cur, w_token}, std::vector<int>{hist_nxt});
-    engine->add_node(std::make_unique<TokenToStringNode>(), {w_token}, {w_output});
+    engine->add_node(std::make_unique<LLMInferNode>(), {w_context}, std::vector<int>{w_token, w_token_id});
+    engine->add_node(std::make_unique<TokenAccumNode>(), std::vector<int>{hist_cur, w_token_id}, std::vector<int>{hist_nxt});
+    engine->add_node(std::make_unique<DetokenizeNode>(), {w_token_id}, {w_output});
     engine->add_node(std::make_unique<StopConditionNode>(), {w_token}, {w_stop});
 
     engine->compile();
