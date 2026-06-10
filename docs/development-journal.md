@@ -345,3 +345,143 @@ System nodes CAN be dragged in the UI but their positions reset on reload unless
 6. **BREAK wire as engine primitive**: Adding a dedicated `break_source_wire` field to LogicEngine (rather than a separate node) kept the implementation clean. The routing pattern (wire A → BREAK system node → SYS_BREAK wire) maps naturally.
 
 7. **Build infrastructure is fragile**: Drogon requires cloning the whole repo, libcurl-devel is a manual dependency, and the cmake was pre-configured. Moving to llama.cpp will add its own build complexity.
+
+---
+
+## P4 — llama.cpp Local Backend Migration
+
+### Motivation
+
+The API-based architecture forced several compromises:
+- Word-level heuristic tokenization instead of real LLM token IDs
+- Full context re-sent on every API call (no KV cache)
+- Speculative batch TokenCache as a workaround for latency
+- No logit/probability access
+
+Local inference via llama.cpp resolves all of these, enabling the original "one real token per tick" vision.
+
+### DataType System Overhaul
+
+New `TOKEN_ID` type (value 6) representing a single integer token ID from the model's vocabulary. This is distinct from `TOKEN` (value 3), which stores the text representation for display and stop-condition checking.
+
+- `TOKEN_STREAM` changed from `vector<string>` to `vector<int>` — stores token ID sequences
+- `CONTEXT_BUFFER` changed from `vector<string>` to `vector<int>` — stores assembled context as token IDs
+- New factory methods: `Value::token_id(int)`, `Value::token_stream(vector<int>)`, `Value::context_buffer(vector<int>)`
+
+### New InferenceBackend Interface
+
+The old `infer(context, max_tokens, temperature) -> vector<string>` was replaced with:
+
+```cpp
+virtual vector<int> tokenize(const string& text, bool add_special) = 0;
+virtual string detokenize(int token_id) = 0;
+virtual pair<int,string> infer_step(const vector<int>& ctx, float temp) = 0;
+virtual void reset() = 0;
+```
+
+### LlamaBackend Implementation
+
+- Uses llama.cpp C API (`llama_model_load_from_file`, `llama_decode`, `llama_sampler_sample`)
+- **Incremental inference**: tracks `decoded_count_` to only decode new tokens each tick, leveraging KV cache
+- BOS management: LLMInferNode prepends BOS internally; TokenizerNode uses `add_special=false`
+- `reset()` frees and recreates the `llama_context` (clears KV cache)
+- Mode: `llama_model` shared globally, `llama_context` per LLMInferNode instance
+- Supports `n_gpu_layers` config for GPU offload (Vulkan/CUDA)
+- Stub mode when no model path configured: token IDs return -1, text returns `[stub_N]`
+
+### New Nodes
+
+| Node | Kind | Role |
+|------|------|------|
+| `TokenizerNode` | `Tokenizer` | STRING → TOKEN_STREAM (real token IDs via llama tokenizer) |
+| `DetokenizeNode` | `Detokenize` | TOKEN_ID → STRING (detokenize via llama) |
+
+### Modified Nodes
+
+| Node | Change |
+|------|--------|
+| `LLMInferNode` | Dual output: TOKEN(text) + TOKEN_ID(int); callback returns `pair<string,int>` |
+| `TokenAccumNode` | Input changed from TOKEN to TOKEN_ID; appends `int` to `token_ids` |
+| `ContextBuildNode` | Operates on `vector<int>` instead of `vector<string>` |
+| `Str2Stream` | Added `tokenize_callback` (backward compat); now produces `vector<int>` |
+| `Stream2Str` | Added `detokenize_callback`; detokenizes each ID then joins |
+| `ShowStream` | Added `detokenize_callback` for display |
+
+### Removed Components
+
+- `APIBackend.h` — libcurl/SiliconFlow backend, replaced by `LlamaBackend.h`
+- `TokenCache.h` — speculative batch cache, made obsolete by KV cache
+- `libcurl` dependency — no longer needed
+
+### Tokenizer Consistency Rule
+
+TokenizerNode always tokenizes with `add_special=false`. LLMInferNode manages BOS internally. This prevents duplicate BOS tokens when multiple token streams are concatenated by ContextBuild.
+
+### GPU Acceleration
+
+- **Vulkan**: requires `shaderc` package (for `glslc`), build with `-DGGML_VULKAN=ON`, set `n_gpu_layers=99`
+- **CUDA**: requires CUDA toolkit, build with `-DGGML_CUDA=ON`
+- Fallback: CPU-only works out of the box, sufficient for small models
+
+### Build Changes
+
+- Added llama.cpp as a git submodule dependency via `add_subdirectory(libs/llama.cpp)`
+- Removed `find_package(CURL)` and `CURL::libcurl` linkage
+- Added include paths for `llama.cpp/include` and `llama.cpp/ggml/include`
+- CMake targets: `llama`, `ggml`, `ggml-base`, `ggml-cpu`
+
+### Test Infrastructure
+
+Test files in `tests/`:
+- `test_datatype.cpp` — DataType enum, Value constructors, to_json/from_json roundtrip
+- `test_nodes_ir.cpp` — Full auto-regressive circuit compile + tick with stub backend
+- `test_llama_backend.cpp` — Real model loading, tokenization, detokenization, inference
+
+### Web UI Updates
+
+- TOKEN_ID color: `#fb923c` (orange), type label: `TKID`
+- Node palette: `Tokenizer` and `Detokenize` added to Convert group
+- Register config: token_ids displayed as comma-separated integers
+- LLMInfer node: renders 2 output ports automatically from schema
+
+### Config Format (new)
+
+```json
+{
+    "model_path": "/path/to/model.gguf",
+    "n_gpu_layers": 99,
+    "temperature": 0.7,
+    "verbose": true
+}
+```
+
+### Circuit Topology (demo)
+
+```
+StrConst → Tokenizer → TOKEN_STREAM[int] ──┐
+                                            ├→ ContextBuild → CONTEXT_BUFFER[int]
+UserInput → Tokenizer → TOKEN_STREAM[int]──┘         │
+                           Register[TOKEN_STREAM] ────┘   │
+                                                          v
+                          LLMInfer → TOKEN[str] (display, stop)
+                                   → TOKEN_ID[int] → TokenAccum → Reg[nxt]
+                                                    → Detokenize → STRING
+```
+
+### Known Issues (P4)
+
+1. **Qwen3.5 BOS token = 11 (comma)**: The model's `add_bos_token` is false, so BOS=11 is a placeholder. Inference works correctly without BOS prepending.
+2. **CPU model loading is slow** (~30s for 3.9GB f16) due to DDR4-2133 memory bandwidth. Vulkan GPU loading is significantly faster.
+3. **No multi-model support**: Single `LlamaBackend` per `ExecuteEngine`. Multiple LLMInfer nodes share the same model.
+4. **No logit bias / custom sampling yet**: Currently uses temperature-only sampler chain. Token steering architecture is planned but not implemented.
+5. **GraphController unchanged**: self-adapts by reading Component schemas dynamically. No special handling needed for new types.
+
+### Lessons (P4)
+
+1. **Real token IDs are transformative**: The circuit now operates on the model's actual vocabulary. Context buffers contain real token ID sequences that the model can understand natively.
+
+2. **KV cache makes incremental inference trivial**: One `llama_decode` per tick, no context reconstruction needed. This is the architecture the project was designed for.
+
+3. **CPU fallback is essential**: GPU toolchain issues (missing `glslc`, CUDA toolkit) are common. The architecture degrades gracefully to CPU-only with the same code path.
+
+4. **Header-only LogicEngine was a good design choice**: All node changes (new DataType, new nodes, modified schemas) were self-contained in one file. No build system changes needed for the IR layer.
